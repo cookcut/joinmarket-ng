@@ -58,7 +58,10 @@ The recommended deployment uses Docker Compose with an isolated network where th
 mkdir -p tor/data tor/run
 sudo chown -R 1000:1000 tor/data tor/run
 
-# Start both directory server and Tor
+# Start both directory server and Tor (uses pre-built image)
+docker compose up -d
+
+# Or build locally instead
 docker compose up -d --build
 
 # View logs
@@ -70,6 +73,8 @@ cat tor/data/jm_directory/hostname
 # Stop services
 docker compose down
 ```
+
+By default, docker-compose.yml uses the pre-built image `ghcr.io/m0wer/joinmarket-v2-directory-server:master`. To build locally, uncomment the `build` section and comment out the `image` line in docker-compose.yml.
 
 #### Vanity Onion Address (Optional)
 

@@ -1,8 +1,9 @@
 services:
   directory_server:
-    build:
-      context: ..
-      dockerfile: directory_server/Dockerfile
+    image: ghcr.io/m0wer/joinmarket-v2-directory-server:master
+    # build:
+    #   context: ..
+    #   dockerfile: directory_server/Dockerfile
     container_name: jm_directory_server
     environment:
       - NETWORK=mainnet
