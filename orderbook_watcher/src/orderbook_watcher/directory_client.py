@@ -100,6 +100,7 @@ class DirectoryClient:
         self.nick = generate_jm_nick(JM_VERSION)
         self.offers: dict[tuple[str, int], Offer] = {}
         self.bonds: dict[str, FidelityBond] = {}
+        self.last_seen: dict[str, float] = {}
         self.running = False
 
     async def connect(self) -> None:
@@ -485,6 +486,11 @@ class DirectoryClient:
         logger.info(f"Starting continuous listener for {self.onion_address}:{self.port}")
         peers_with_bonds: set[str] = set()
         peers_without_bonds: set[str] = set()
+        last_cleanup_time = asyncio.get_event_loop().time()
+        last_orderbook_refresh_time = asyncio.get_event_loop().time()
+        cleanup_interval = 60.0
+        orderbook_refresh_interval = 3600.0
+        stale_timeout = 900.0
 
         while self.running:
             try:
@@ -500,6 +506,7 @@ class DirectoryClient:
                     }
                     await self.connection.send(json.dumps(pubmsg).encode("utf-8"))
                     logger.info("Reconnected and sent !orderbook request")
+                    last_orderbook_refresh_time = asyncio.get_event_loop().time()
 
                 if not self.connection:
                     raise DirectoryClientError("Not connected")
@@ -514,6 +521,7 @@ class DirectoryClient:
                         offer_key = (offer.counterparty, offer.oid)
                         is_new_offer = offer_key not in self.offers
                         self.offers[offer_key] = offer
+                        self.last_seen[offer.counterparty] = asyncio.get_event_loop().time()
                         logger.debug(f"Updated offer: {offer_key}")
 
                         if offer.fidelity_bond_data:
@@ -531,6 +539,25 @@ class DirectoryClient:
                 else:
                     logger.debug(f"Received message type {msg_type}")
 
+                current_time = asyncio.get_event_loop().time()
+                if current_time - last_cleanup_time >= cleanup_interval:
+                    removed_count = self._cleanup_stale_offers(current_time, stale_timeout)
+                    if removed_count > 0:
+                        logger.info(
+                            f"Removed {removed_count} stale offers from inactive counterparties"
+                        )
+                    last_cleanup_time = current_time
+
+                if current_time - last_orderbook_refresh_time >= orderbook_refresh_interval:
+                    logger.info("Sending periodic !orderbook refresh")
+                    if self.connection:
+                        pubmsg = {
+                            "type": MessageType.PUBMSG.value,
+                            "line": f"{self.nick}!PUBLIC!!orderbook",
+                        }
+                        await self.connection.send(json.dumps(pubmsg).encode("utf-8"))
+                    last_orderbook_refresh_time = current_time
+
             except TimeoutError:
                 logger.debug("No messages received in 60s, sending keepalive...")
                 try:
@@ -545,6 +572,25 @@ class DirectoryClient:
                 logger.error(f"Error in continuous listener: {e}")
                 self.connection = None
                 await asyncio.sleep(5)
+
+    def _cleanup_stale_offers(self, current_time: float, stale_timeout: float) -> int:
+        stale_counterparties = [
+            counterparty
+            for counterparty, last_seen_time in self.last_seen.items()
+            if current_time - last_seen_time > stale_timeout
+        ]
+
+        removed_count = 0
+        for counterparty in stale_counterparties:
+            offers_to_remove = [key for key in self.offers if key[0] == counterparty]
+            for key in offers_to_remove:
+                del self.offers[key]
+                removed_count += 1
+                logger.debug(f"Removed stale offer: {key}")
+
+            del self.last_seen[counterparty]
+
+        return removed_count
 
     def stop(self) -> None:
         self.running = False
