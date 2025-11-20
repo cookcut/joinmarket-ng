@@ -106,6 +106,11 @@ class DirectoryClient:
         self.on_disconnect = on_disconnect
         self.initial_orderbook_received = False
         self.last_orderbook_request_time: float = 0.0
+        self.last_offer_received_time: float | None = None
+        self.peerlist_check_interval = 1800.0
+        self.orderbook_refresh_interval = 1800.0
+        self.orderbook_retry_interval = 300.0
+        self.zero_offer_retry_interval = 600.0
 
     async def connect(self) -> None:
         try:
@@ -479,27 +484,44 @@ class DirectoryClient:
         except Exception as e:
             logger.warning(f"Failed to request bond from {maker_nick}: {e}")
 
+    async def _send_orderbook_request(self, reason: str) -> bool:
+        """Send a !orderbook request and update the retry timestamp."""
+        if not self.connection:
+            logger.warning(f"Cannot send {reason} !orderbook request without a connection")
+            return False
+
+        try:
+            peer_count = len(await self.get_peerlist())
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(f"Failed to fetch peerlist for {reason} request: {exc}")
+            return False
+
+        if peer_count == 0:
+            logger.warning(f"No peers available, skipping {reason} !orderbook request")
+            return False
+
+        pubmsg = {
+            "type": MessageType.PUBMSG.value,
+            "line": f"{self.nick}!PUBLIC!!orderbook",
+        }
+        await self.connection.send(json.dumps(pubmsg).encode("utf-8"))
+        self.last_orderbook_request_time = asyncio.get_event_loop().time()
+        logger.info(f"Sent {reason} !orderbook request ({peer_count} peers)")
+        return True
+
     async def listen_continuously(self) -> None:
         self.running = True
         logger.info(f"Starting continuous listener for {self.onion_address}:{self.port}")
         peers_with_bonds: set[str] = set()
         peers_without_bonds: set[str] = set()
-        last_peerlist_check_time = asyncio.get_event_loop().time()
-        last_orderbook_refresh_time = asyncio.get_event_loop().time()
-        peerlist_check_interval = 1800.0
-        orderbook_refresh_interval = 1800.0
-        orderbook_retry_interval = 300.0
+        loop = asyncio.get_event_loop()
+        last_peerlist_check_time = loop.time()
+        last_orderbook_refresh_time = loop.time()
+        last_zero_offer_retry_time = loop.time()
 
         if self.connection:
-            peer_count = len(await self.get_peerlist())
-            pubmsg = {
-                "type": MessageType.PUBMSG.value,
-                "line": f"{self.nick}!PUBLIC!!orderbook",
-            }
-            await self.connection.send(json.dumps(pubmsg).encode("utf-8"))
-            self.last_orderbook_request_time = asyncio.get_event_loop().time()
-            logger.info(f"Sent initial !orderbook request ({peer_count} peers)")
-            last_orderbook_refresh_time = asyncio.get_event_loop().time()
+            await self._send_orderbook_request("initial")
+            last_orderbook_refresh_time = loop.time()
 
         while self.running:
             try:
@@ -519,6 +541,7 @@ class DirectoryClient:
                         is_new_offer = offer_key not in self.offers
                         self.offers[offer_key] = offer
                         logger.debug(f"Updated offer: {offer_key}")
+                        self.last_offer_received_time = loop.time()
 
                         if not self.initial_orderbook_received and len(self.offers) > 0:
                             self.initial_orderbook_received = True
@@ -544,44 +567,44 @@ class DirectoryClient:
                 if (
                     not self.initial_orderbook_received
                     and len(self.offers) == 0
-                    and current_time - self.last_orderbook_request_time >= orderbook_retry_interval
+                    and current_time - self.last_orderbook_request_time
+                    >= self.orderbook_retry_interval
                 ):
                     logger.warning(
                         f"No offers received yet from {self.onion_address}:{self.port}, "
                         f"retrying !orderbook request"
                     )
-                    if self.connection:
-                        try:
-                            peer_count = len(await self.get_peerlist())
-                            if peer_count > 0:
-                                pubmsg = {
-                                    "type": MessageType.PUBMSG.value,
-                                    "line": f"{self.nick}!PUBLIC!!orderbook",
-                                }
-                                await self.connection.send(json.dumps(pubmsg).encode("utf-8"))
-                                self.last_orderbook_request_time = current_time
-                                logger.info(f"Resent !orderbook request ({peer_count} peers)")
-                            else:
-                                logger.warning("No peers in peerlist, skipping retry")
-                        except Exception as e:
-                            logger.warning(f"Failed to retry orderbook request: {e}")
+                    await self._send_orderbook_request("retry")
 
-                if current_time - last_peerlist_check_time >= peerlist_check_interval:
+                if (
+                    len(self.offers) == 0
+                    and current_time - last_zero_offer_retry_time >= self.zero_offer_retry_interval
+                ):
+                    logger.info("No offers currently available, sending zero-offer retry request")
+                    if await self._send_orderbook_request("zero-offer retry"):
+                        last_zero_offer_retry_time = current_time
+
+                if (
+                    self.last_offer_received_time
+                    and (current_time - self.last_offer_received_time)
+                    >= self.orderbook_refresh_interval
+                ):
+                    logger.warning(
+                        "No offers received since the last refresh interval, re-requesting"
+                    )
+                    await self._send_orderbook_request("stale-offer refresh")
+                    self.last_offer_received_time = current_time
+
+                if current_time - last_peerlist_check_time >= self.peerlist_check_interval:
                     removed_count = await self._cleanup_disconnected_peers()
                     if removed_count > 0:
                         logger.info(f"Removed {removed_count} offers from disconnected peers")
                     last_peerlist_check_time = current_time
 
-                if current_time - last_orderbook_refresh_time >= orderbook_refresh_interval:
+                if current_time - last_orderbook_refresh_time >= self.orderbook_refresh_interval:
                     logger.info("Sending periodic !orderbook refresh")
-                    if self.connection:
-                        pubmsg = {
-                            "type": MessageType.PUBMSG.value,
-                            "line": f"{self.nick}!PUBLIC!!orderbook",
-                        }
-                        await self.connection.send(json.dumps(pubmsg).encode("utf-8"))
-                        self.last_orderbook_request_time = current_time
-                    last_orderbook_refresh_time = current_time
+                    if await self._send_orderbook_request("periodic refresh"):
+                        last_orderbook_refresh_time = current_time
 
             except TimeoutError:
                 logger.debug("No messages received in 60s, sending keepalive...")
