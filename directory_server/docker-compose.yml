@@ -21,6 +21,10 @@ services:
         limits:
           cpus: 2
           memory: 1G
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
 
   tor:
     image: ghcr.io/m0wer/docker-tor:latest
