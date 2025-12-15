@@ -78,10 +78,12 @@ class DirectoryServer:
     ) -> None:
         peer_addr = writer.get_extra_info("peername")
         conn_id = f"{peer_addr[0]}:{peer_addr[1]}"
-        logger.debug(f"New connection from {conn_id}")
+        logger.trace(f"New connection from {conn_id}")
 
         transport = writer.transport
-        transport.set_write_buffer_limits(high=0)
+        # Set reasonable write buffer limits (64KB high, 16KB low)
+        # This allows some buffering while preventing memory bloat
+        transport.set_write_buffer_limits(high=65536, low=16384)  # type: ignore[union-attr]
         sock = transport.get_extra_info("socket")
         if sock:
             import socket
@@ -106,11 +108,8 @@ class DirectoryServer:
 
     async def _perform_handshake(self, connection: TCPConnection, conn_id: str) -> str | None:
         try:
-            logger.debug(f"_perform_handshake: waiting for handshake from {conn_id}")
             data = await asyncio.wait_for(connection.receive(), timeout=30.0)
-            logger.debug(f"_perform_handshake: received {len(data)} bytes from {conn_id}")
             envelope = MessageEnvelope.from_bytes(data)
-            logger.debug(f"_perform_handshake: parsed envelope type={envelope.message_type}")
 
             if envelope.message_type != MessageType.HANDSHAKE:
                 logger.warning(f"Expected handshake, got {envelope.message_type}")
@@ -124,17 +123,10 @@ class DirectoryServer:
                 message_type=MessageType.DN_HANDSHAKE, payload=json.dumps(response)
             )
             response_bytes = response_envelope.to_bytes()
-            logger.debug(
-                f"Sending handshake response: type={response_envelope.message_type}, "
-                f"payload={response}, bytes_len={len(response_bytes)}, "
-                f"actual_bytes={response_bytes.decode('utf-8')}"
-            )
             try:
                 await connection.send(response_bytes)
-                logger.debug("Handshake response sent successfully, waiting a moment...")
-                # Give the client time to receive and process the response
-                await asyncio.sleep(0.1)
-                logger.debug("Post-handshake delay completed")
+                # Small delay to let client process the handshake response
+                await asyncio.sleep(0.05)
             except Exception as e:
                 logger.error(f"Failed to send handshake response: {e}")
                 raise
@@ -146,16 +138,7 @@ class DirectoryServer:
             self.peer_registry.update_status(peer_key, PeerStatus.HANDSHAKED)
             self.peer_key_to_conn_id[peer_key] = conn_id
 
-            logger.debug(
-                f"Mapped peer_key={peer_key} (nick={peer_info.nick}, location={peer_location}) "
-                f"to conn_id={conn_id}, connection exists: {self.connections.get(conn_id) is not None}"
-            )
-
-            # NOTE: Original JoinMarket directory does NOT send peerlist automatically after handshake
-            # Peerlist is only sent when forwarding private messages or on disconnect events
-            # logger.debug(f"_perform_handshake: sending peerlist to {peer_key}")
-            # await self.message_router.send_peerlist(peer_key, peer_info.network)
-            logger.debug(f"_perform_handshake: handshake complete for {peer_key}")
+            logger.trace(f"Handshake complete for {peer_key} (nick={peer_info.nick})")
 
             return peer_key
 
@@ -212,17 +195,12 @@ class DirectoryServer:
         try:
             await connection.close()
         except Exception as e:
-            logger.debug(f"Error closing connection: {e}")
+            logger.trace(f"Error closing connection: {e}")
 
     async def _send_to_peer(self, peer_location: str, data: bytes) -> None:
         peer_key = peer_location
 
         conn_id = self.peer_key_to_conn_id.get(peer_key)
-        logger.debug(
-            f"_send_to_peer: peer_location={peer_location}, conn_id={conn_id}, "
-            f"peer_key_to_conn_id keys: {list(self.peer_key_to_conn_id.keys())}, "
-            f"connection pool keys: {list(self.connections.connections.keys())}"
-        )
         if not conn_id:
             raise ValueError(f"No connection for peer: {peer_location}")
 

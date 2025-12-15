@@ -41,6 +41,7 @@ class TCPConnection(Connection):
         self.writer = writer
         self.max_message_size = max_message_size
         self._connected = True
+        self._send_lock = asyncio.Lock()
 
     async def send(self, data: bytes) -> None:
         if not self._connected:
@@ -48,44 +49,34 @@ class TCPConnection(Connection):
         if len(data) > self.max_message_size:
             raise ValueError(f"Message too large: {len(data)} > {self.max_message_size}")
 
-        message_to_send = data + b"\r\n"
-        logger.debug(
-            f"TCPConnection.send: sending {len(message_to_send)} bytes (with \\r\\n): {message_to_send[:200]!r}"
-        )
-        logger.debug(f"TCPConnection.send: full message: {message_to_send!r}")
-        self.writer.write(message_to_send)
-        logger.debug("TCPConnection.send: write() completed, calling drain()")
-        await self.writer.drain()
-        logger.debug(
-            f"TCPConnection.send: drain completed, checking if writer is closing: {self.writer.is_closing()}"
-        )
+        async with self._send_lock:
+            if not self._connected:
+                raise ConnectionError("Connection closed")
 
-        # Force a small delay to ensure data is flushed
-        try:
-            await asyncio.sleep(0.01)
-            logger.debug("TCPConnection.send: post-drain sleep completed")
-        except Exception as e:
-            logger.error(f"TCPConnection.send: error during sleep: {e}")
+            message_to_send = data + b"\r\n"
+            logger.trace(f"TCPConnection.send: sending {len(message_to_send)} bytes")
+            try:
+                self.writer.write(message_to_send)
+                await self.writer.drain()
+            except (BrokenPipeError, ConnectionResetError, OSError) as e:
+                self._connected = False
+                raise ConnectionError(f"Send failed: {e}") from e
 
     async def receive(self) -> bytes:
         if not self._connected:
             raise ConnectionError("Connection closed")
 
         try:
-            logger.debug("TCPConnection.receive: waiting for message...")
             data = await self.reader.readuntil(b"\n")
             stripped = data.rstrip(b"\r\n")
-            logger.debug(
-                f"TCPConnection.receive: received {len(data)} bytes, stripped to {len(stripped)}"
-            )
-            logger.debug(f"TCPConnection.receive: full message: {stripped!r}")
+            logger.trace(f"TCPConnection.receive: received {len(stripped)} bytes")
             return stripped
         except asyncio.LimitOverrunError as e:
             logger.error(f"Message too large (>{self.max_message_size} bytes)")
             raise ConnectionError("Message too large") from e
         except asyncio.IncompleteReadError as e:
             self._connected = False
-            logger.debug("TCPConnection.receive: connection closed by peer")
+            logger.trace("TCPConnection.receive: connection closed by peer")
             raise ConnectionError("Connection closed by peer") from e
 
     async def close(self) -> None:

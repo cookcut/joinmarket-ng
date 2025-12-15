@@ -4,6 +4,7 @@ Message routing logic for forwarding messages between peers.
 Implements Single Responsibility Principle: only handles message routing.
 """
 
+import asyncio
 from collections.abc import Awaitable, Callable
 
 from jmcore.models import MessageEnvelope, NetworkType, PeerInfo
@@ -50,6 +51,8 @@ class MessageRouter:
 
         connected_peers = self.peer_registry.get_all_connected(from_peer.network)
 
+        # Build list of send tasks for concurrent broadcast
+        tasks = []
         for peer in connected_peers:
             peer_key = (
                 peer.nick
@@ -58,13 +61,20 @@ class MessageRouter:
             )
             if peer_key == from_key:
                 continue
+            tasks.append(self._safe_send(peer_key, envelope.to_bytes(), peer.nick))
 
-            try:
-                await self.send_callback(peer_key, envelope.to_bytes())
-            except Exception as e:
-                logger.error(f"Failed to forward public message to {peer.nick}: {e}")
+        # Execute all sends concurrently
+        if tasks:
+            await asyncio.gather(*tasks)
 
-        logger.debug(f"Broadcasted public message from {from_nick} to {len(connected_peers)} peers")
+        logger.trace(f"Broadcasted public message from {from_nick} to {len(tasks)} peers")
+
+    async def _safe_send(self, peer_key: str, data: bytes, nick: str | None = None) -> None:
+        """Send with exception handling to prevent one failed send from affecting others."""
+        try:
+            await self.send_callback(peer_key, data)
+        except Exception as e:
+            logger.warning(f"Failed to send to {nick or peer_key}: {e}")
 
     async def _handle_private_message(self, envelope: MessageEnvelope, from_key: str) -> None:
         parsed = parse_jm_message(envelope.payload)
@@ -76,7 +86,7 @@ class MessageRouter:
 
         to_peer = self.peer_registry.get_by_nick(to_nick)
         if not to_peer:
-            logger.debug(f"Target peer not found: {to_nick}")
+            logger.trace(f"Target peer not found: {to_nick}")
             return
 
         from_peer = self.peer_registry.get_by_key(from_key)
@@ -91,11 +101,11 @@ class MessageRouter:
                 else to_peer.location_string()
             )
             await self.send_callback(to_peer_key, envelope.to_bytes())
-            logger.debug(f"Routed private message: {from_nick} -> {to_nick}")
+            logger.trace(f"Routed private message: {from_nick} -> {to_nick}")
 
             await self._send_peer_location(to_peer_key, from_peer)
         except Exception as e:
-            logger.error(f"Failed to route private message: {e}")
+            logger.warning(f"Failed to route private message to {to_nick}: {e}")
 
     async def _handle_peerlist_request(self, from_key: str) -> None:
         peer = self.peer_registry.get_by_key(from_key)
@@ -108,30 +118,26 @@ class MessageRouter:
         pong_envelope = MessageEnvelope(message_type=MessageType.PONG, payload="")
         try:
             await self.send_callback(from_key, pong_envelope.to_bytes())
-            logger.debug(f"Sent PONG to {from_key}")
+            logger.trace(f"Sent PONG to {from_key}")
         except Exception as e:
-            logger.debug(f"Failed to send PONG: {e}")
+            logger.trace(f"Failed to send PONG: {e}")
 
     async def send_peerlist(self, to_key: str, network: NetworkType) -> None:
-        logger.debug(f"send_peerlist called for {to_key}, network={network}")
+        logger.trace(f"send_peerlist called for {to_key}, network={network}")
         peers = self.peer_registry.get_peerlist_for_network(network)
-        logger.debug(f"send_peerlist: got {len(peers) if peers else 0} peers")
         if not peers:
-            logger.debug("send_peerlist: no peers to send, returning")
             return
 
         entries = [create_peerlist_entry(nick, loc) for nick, loc in peers]
         peerlist_msg = ",".join(entries)
-        logger.debug(f"send_peerlist: peerlist message: {peerlist_msg}")
 
         envelope = MessageEnvelope(message_type=MessageType.PEERLIST, payload=peerlist_msg)
 
         try:
-            logger.debug(f"send_peerlist: calling send_callback for {to_key}")
             await self.send_callback(to_key, envelope.to_bytes())
-            logger.debug(f"Sent peerlist with {len(peers)} peers to {to_key}")
+            logger.trace(f"Sent peerlist with {len(peers)} peers to {to_key}")
         except Exception as e:
-            logger.error(f"Failed to send peerlist: {e}", exc_info=True)
+            logger.warning(f"Failed to send peerlist to {to_key}: {e}")
 
     async def _send_peer_location(self, to_location: str, peer_info: PeerInfo) -> None:
         if peer_info.onion_address == "NOT-SERVING-ONION":
@@ -143,7 +149,7 @@ class MessageRouter:
         try:
             await self.send_callback(to_location, envelope.to_bytes())
         except Exception as e:
-            logger.debug(f"Failed to send peer location: {e}")
+            logger.trace(f"Failed to send peer location: {e}")
 
     async def broadcast_peer_disconnect(self, peer_location: str, network: NetworkType) -> None:
         peer = self.peer_registry.get_by_location(peer_location)
@@ -154,16 +160,17 @@ class MessageRouter:
         envelope = MessageEnvelope(message_type=MessageType.PEERLIST, payload=entry)
 
         connected_peers = self.peer_registry.get_all_connected(network)
+
+        # Build list of send tasks for concurrent broadcast
+        tasks = []
         for p in connected_peers:
             if p.location_string() == peer_location:
                 continue
+            peer_key = p.nick if p.location_string() == "NOT-SERVING-ONION" else p.location_string()
+            tasks.append(self._safe_send(peer_key, envelope.to_bytes(), p.nick))
 
-            try:
-                peer_key = (
-                    p.nick if p.location_string() == "NOT-SERVING-ONION" else p.location_string()
-                )
-                await self.send_callback(peer_key, envelope.to_bytes())
-            except Exception as e:
-                logger.error(f"Failed to broadcast disconnect: {e}")
+        # Execute all sends concurrently
+        if tasks:
+            await asyncio.gather(*tasks)
 
-        logger.info(f"Broadcasted disconnect for {peer.nick}")
+        logger.info(f"Broadcasted disconnect for {peer.nick} to {len(tasks)} peers")
