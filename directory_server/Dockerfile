@@ -55,6 +55,9 @@ FROM base AS production
 # =============================================================================
 FROM python:${PYTHON_VERSION} AS debug-base
 
+RUN apt install --no-install-recommends -y gdb && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Install jmcore dependencies first (cached layer)
