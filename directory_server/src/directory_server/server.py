@@ -32,6 +32,7 @@ class DirectoryServer:
             peer_registry=self.peer_registry,
             send_callback=self._send_to_peer,
             broadcast_batch_size=settings.broadcast_batch_size,
+            on_send_failed=self._handle_send_failed,
         )
         self.handshake_handler = HandshakeHandler(
             network=self.network, server_nick=f"directory-{settings.network}", motd=settings.motd
@@ -211,6 +212,18 @@ class DirectoryServer:
             raise ValueError(f"No connection for conn_id: {conn_id}")
 
         await connection.send(data)
+
+    async def _handle_send_failed(self, peer_key: str) -> None:
+        """
+        Called when sending to a peer fails.
+
+        Removes the peer from the connection mapping to prevent further
+        send attempts to this dead connection. The actual cleanup will
+        happen when the connection handler detects the disconnection.
+        """
+        if peer_key in self.peer_key_to_conn_id:
+            logger.debug(f"Removing failed peer mapping: {peer_key}")
+            del self.peer_key_to_conn_id[peer_key]
 
     def is_healthy(self) -> bool:
         return (

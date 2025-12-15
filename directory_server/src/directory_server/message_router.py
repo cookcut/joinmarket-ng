@@ -5,6 +5,7 @@ Implements Single Responsibility Principle: only handles message routing.
 """
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 
 from jmcore.models import MessageEnvelope, NetworkType, PeerInfo
@@ -14,6 +15,7 @@ from loguru import logger
 from directory_server.peer_registry import PeerRegistry
 
 SendCallback = Callable[[str, bytes], Awaitable[None]]
+FailedSendCallback = Callable[[str], Awaitable[None]]
 
 # Default batch size for concurrent broadcasts to limit memory usage
 # This can be overridden via Settings.broadcast_batch_size
@@ -26,10 +28,14 @@ class MessageRouter:
         peer_registry: PeerRegistry,
         send_callback: SendCallback,
         broadcast_batch_size: int = DEFAULT_BROADCAST_BATCH_SIZE,
+        on_send_failed: FailedSendCallback | None = None,
     ):
         self.peer_registry = peer_registry
         self.send_callback = send_callback
         self.broadcast_batch_size = broadcast_batch_size
+        self.on_send_failed = on_send_failed
+        # Track peers that failed during current operation to avoid repeated attempts
+        self._failed_peers: set[str] = set()
 
     async def route_message(self, envelope: MessageEnvelope, from_key: str) -> None:
         if envelope.message_type == MessageType.PUBMSG:
@@ -81,10 +87,22 @@ class MessageRouter:
 
     async def _safe_send(self, peer_key: str, data: bytes, nick: str | None = None) -> None:
         """Send with exception handling to prevent one failed send from affecting others."""
+        # Skip if this peer already failed in current operation
+        if peer_key in self._failed_peers:
+            return
+
         try:
             await self.send_callback(peer_key, data)
         except Exception as e:
             logger.warning(f"Failed to send to {nick or peer_key}: {e}")
+            # Mark peer as failed to prevent repeated attempts
+            self._failed_peers.add(peer_key)
+            # Notify server to clean up this peer
+            if self.on_send_failed:
+                try:
+                    await self.on_send_failed(peer_key)
+                except Exception as cleanup_err:
+                    logger.trace(f"Error in on_send_failed callback: {cleanup_err}")
 
     async def _batched_broadcast(self, targets: list[tuple[str, str | None]], data: bytes) -> None:
         """
@@ -93,8 +111,14 @@ class MessageRouter:
         Instead of creating all coroutines at once (which caused 2GB+ memory usage),
         we process in batches of broadcast_batch_size to keep memory bounded.
         """
+        # Clear failed peers set at start of broadcast to allow fresh attempts
+        # while still preventing repeated attempts within this broadcast
+        self._failed_peers.clear()
+
         for i in range(0, len(targets), self.broadcast_batch_size):
             batch = targets[i : i + self.broadcast_batch_size]
+            # Filter out peers that have already failed in this broadcast
+            batch = [(pk, nick) for pk, nick in batch if pk not in self._failed_peers]
             tasks = [self._safe_send(peer_key, data, nick) for peer_key, nick in batch]
             if tasks:
                 await asyncio.gather(*tasks)
@@ -129,6 +153,15 @@ class MessageRouter:
             await self._send_peer_location(to_peer_key, from_peer)
         except Exception as e:
             logger.warning(f"Failed to route private message to {to_nick}: {e}")
+            # Notify server to clean up this peer's mapping
+            if self.on_send_failed:
+                to_peer_key = (
+                    to_peer.nick
+                    if to_peer.location_string == "NOT-SERVING-ONION"
+                    else to_peer.location_string
+                )
+                with contextlib.suppress(Exception):
+                    await self.on_send_failed(to_peer_key)
 
     async def _handle_peerlist_request(self, from_key: str) -> None:
         peer = self.peer_registry.get_by_key(from_key)
