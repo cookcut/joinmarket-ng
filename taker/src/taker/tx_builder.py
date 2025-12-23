@@ -245,12 +245,16 @@ class CoinJoinTxBuilder:
         return tx_bytes, metadata
 
     def _serialize_tx(self, inputs: list[TxInput], outputs: list[TxOutput]) -> bytes:
-        """Serialize transaction to bytes."""
+        """Serialize transaction to bytes.
+
+        For unsigned transactions, we use non-SegWit format (no marker/flag/witness).
+        The SegWit marker (0x00, 0x01) is only added when witnesses are present.
+        """
         # Version (4 bytes, little-endian)
         result = struct.pack("<I", 2)
 
-        # Marker and flag for SegWit
-        result += bytes([0x00, 0x01])
+        # NO SegWit marker/flag for unsigned transactions!
+        # The marker is only added when there's actual witness data.
 
         # Input count
         result += varint(len(inputs))
@@ -266,9 +270,7 @@ class CoinJoinTxBuilder:
         for out in outputs:
             result += serialize_output(out)
 
-        # Witness data (empty for unsigned)
-        for _ in inputs:
-            result += bytes([0x00])  # Empty witness
+        # NO witness data for unsigned transactions
 
         # Locktime
         result += struct.pack("<I", 0)
@@ -332,20 +334,29 @@ class CoinJoinTxBuilder:
     def _parse_tx(
         self, tx_bytes: bytes
     ) -> tuple[int, int, int, list[dict[str, Any]], list[dict[str, Any]], list[list[bytes]], int]:
-        """Parse a transaction from bytes."""
+        """Parse a transaction from bytes.
+
+        Handles both SegWit (with marker/flag/witness) and non-SegWit formats.
+        Returns marker=0, flag=0 for non-SegWit transactions.
+        """
         offset = 0
 
         # Version
         version = struct.unpack("<I", tx_bytes[offset : offset + 4])[0]
         offset += 4
 
-        # Check for SegWit marker
+        # Check for SegWit marker (0x00 followed by 0x01)
+        # Note: In non-SegWit, byte 4 is the input count which can't be 0x00
+        # (a transaction must have at least one input)
         marker = tx_bytes[offset]
         flag = tx_bytes[offset + 1]
         if marker == 0x00 and flag == 0x01:
             offset += 2
             has_witness = True
         else:
+            # Non-SegWit format - reset marker/flag to 0
+            marker = 0
+            flag = 0
             has_witness = False
 
         # Input count

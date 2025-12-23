@@ -291,15 +291,20 @@ class TestCoinJoinTxBuilder:
         version = int.from_bytes(tx_bytes[:4], "little")
         assert version == 2
 
-    def test_tx_has_segwit_marker(
+    def test_unsigned_tx_has_no_segwit_marker(
         self, builder: CoinJoinTxBuilder, sample_tx_data: CoinJoinTxData
     ) -> None:
-        """Test that transaction has SegWit marker and flag."""
+        """Test that unsigned transaction has NO SegWit marker (non-SegWit format).
+
+        Unsigned transactions use the traditional format without marker/flag/witness.
+        The SegWit marker (0x00, 0x01) is only added when signatures/witnesses are present.
+        This is required for compatibility with reference JoinMarket implementation.
+        """
         tx_bytes, _ = builder.build_unsigned_tx(sample_tx_data)
 
-        # Marker (0x00) and flag (0x01) after version
-        assert tx_bytes[4] == 0x00
-        assert tx_bytes[5] == 0x01
+        # After version (4 bytes), the next byte should be the input count (3 in our test data)
+        # NOT the SegWit marker (0x00)
+        assert tx_bytes[4] == 3  # Input count, not marker
 
     def test_parse_tx_roundtrip(
         self, builder: CoinJoinTxBuilder, sample_tx_data: CoinJoinTxData

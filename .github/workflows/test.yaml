@@ -28,6 +28,7 @@ on:
       - 'docker-compose.yml'
       - '.github/workflows/test.yaml'
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   # ==========================================================================

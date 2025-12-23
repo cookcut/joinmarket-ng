@@ -175,7 +175,7 @@ class MakerBot:
                         host=host,
                         port=port,
                         network=self.config.network.value,
-                        nick=self.nick,
+                        nick_identity=self.nick_identity,
                         location=location,
                         socks_host=self.config.socks_host,
                         socks_port=self.config.socks_port,
@@ -794,15 +794,9 @@ class MakerBot:
                 # Fallback to JSON for unknown commands
                 msg_content = json.dumps(data)
 
-            # Sign ONLY the data portion (without command), with hostid appended
-            signed_data = self.nick_identity.sign_message(msg_content, DEFAULT_HOSTID)
-
-            # The signed_data is: "<msg_content> <pubkey> <sig>"
-            # We need to prepend the command: "<command> <msg_content> <pubkey> <sig>"
-            msg = f"{command} {signed_data}"
-
+            # Send via directory clients - they will sign the message for us
             for client in self.directory_clients.values():
-                await client.send_private_message(taker_nick, msg)
+                await client.send_private_message(taker_nick, command, msg_content)
 
             logger.debug(f"Sent signed {command} to {taker_nick}")
 

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from jmcore.crypto import generate_jm_nick
+from jmcore.crypto import NickIdentity
 from jmcore.directory_client import DirectoryClient
 from jmcore.encryption import CryptoSession
 from jmcore.models import Offer
@@ -55,11 +55,12 @@ class MultiDirectoryClient:
         self,
         directory_servers: list[str],
         network: str,
-        nick: str,
+        nick_identity: NickIdentity,
     ):
         self.directory_servers = directory_servers
         self.network = network
-        self.nick = nick
+        self.nick_identity = nick_identity
+        self.nick = nick_identity.nick
         self.clients: dict[str, DirectoryClient] = {}
         self._response_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 
@@ -76,7 +77,7 @@ class MultiDirectoryClient:
                     host=host,
                     port=port,
                     network=self.network,
-                    nick=self.nick,
+                    nick_identity=self.nick_identity,
                 )
                 await client.connect()
                 self.clients[server] = client
@@ -84,6 +85,7 @@ class MultiDirectoryClient:
                 logger.info(f"Connected to directory server: {server}")
             except Exception as e:
                 logger.warning(f"Failed to connect to {server}: {e}")
+        return connected
         return connected
 
     async def close_all(self) -> None:
@@ -115,10 +117,9 @@ class MultiDirectoryClient:
 
     async def send_privmsg(self, recipient: str, command: str, data: str) -> None:
         """Send a private message via all connected directory servers."""
-        message = f"{command} {data}"
         for client in self.clients.values():
             try:
-                await client.send_private_message(recipient, message)
+                await client.send_private_message(recipient, command, data)
             except Exception as e:
                 logger.warning(f"Failed to send privmsg: {e}")
 
@@ -240,14 +241,15 @@ class Taker:
         self.backend = backend
         self.config = config
 
-        self.nick = generate_jm_nick(JM_VERSION)
+        self.nick_identity = NickIdentity(JM_VERSION)
+        self.nick = self.nick_identity.nick
         self.state = TakerState.IDLE
 
         # Directory client
         self.directory_client = MultiDirectoryClient(
             directory_servers=config.directory_servers,
             network=config.network.value,
-            nick=self.nick,
+            nick_identity=self.nick_identity,
         )
 
         # Orderbook manager
@@ -482,7 +484,7 @@ class Taker:
         # Format: fill <oid> <amount> <taker_pubkey> <commitment>
         for nick, session in self.maker_sessions.items():
             fill_data = f"{session.offer.oid} {self.cj_amount} {taker_pubkey} {commitment_hex}"
-            await self.directory_client.send_privmsg(nick, "!fill", fill_data)
+            await self.directory_client.send_privmsg(nick, "fill", fill_data)
             logger.debug(f"Sent !fill to {nick}")
 
         # Wait for all !pubkey responses at once
@@ -617,7 +619,7 @@ class Taker:
 
             # Encrypt and send
             encrypted_revelation = session.crypto.encrypt(revelation_str)
-            await self.directory_client.send_privmsg(nick, "!auth", encrypted_revelation)
+            await self.directory_client.send_privmsg(nick, "auth", encrypted_revelation)
 
         # Check if we still have enough makers after filtering incompatible ones
         if len(self.maker_sessions) < self.config.minimum_makers:
@@ -964,7 +966,7 @@ class Taker:
                 continue
 
             encrypted_tx = session.crypto.encrypt(tx_b64)
-            await self.directory_client.send_privmsg(nick, "!tx", encrypted_tx)
+            await self.directory_client.send_privmsg(nick, "tx", encrypted_tx)
             logger.debug(f"Sent encrypted !tx to {nick}")
 
         # Wait for all !sig responses at once
@@ -1247,7 +1249,7 @@ class Taker:
             logger.info(f"Requesting broadcast via maker: {maker_nick}")
 
             # Send !push to the maker (unencrypted, like reference implementation)
-            await self.directory_client.send_privmsg(maker_nick, "!push", tx_b64)
+            await self.directory_client.send_privmsg(maker_nick, "push", tx_b64)
 
             # Wait and check if the transaction was broadcast
             await asyncio.sleep(2)  # Give maker time to broadcast

@@ -82,8 +82,14 @@ class PoDLECommitment:
         }
 
     def to_commitment_str(self) -> str:
-        """Get commitment as hex string."""
-        return self.commitment.hex()
+        """
+        Get commitment as string with type prefix.
+
+        JoinMarket requires a commitment type prefix to allow future
+        commitment schemes. "P" indicates a standard PoDLE commitment.
+        Format: "P" + hex(commitment)
+        """
+        return "P" + self.commitment.hex()
 
 
 # ==============================================================================

@@ -22,7 +22,7 @@ from typing import Any
 from loguru import logger
 
 from jmcore.btc_script import mk_freeze_script, redeem_script_to_p2wsh_script
-from jmcore.crypto import generate_jm_nick, verify_fidelity_bond_proof
+from jmcore.crypto import NickIdentity, verify_fidelity_bond_proof
 from jmcore.models import FidelityBond, Offer, OfferType
 from jmcore.network import TCPConnection, connect_direct, connect_via_tor
 from jmcore.protocol import (
@@ -127,7 +127,7 @@ class DirectoryClient:
         host: str,
         port: int,
         network: str,
-        nick: str | None = None,
+        nick_identity: NickIdentity | None = None,
         location: str = "NOT-SERVING-ONION",
         socks_host: str = "127.0.0.1",
         socks_port: int = 9050,
@@ -143,7 +143,7 @@ class DirectoryClient:
             host: Directory server hostname or .onion address
             port: Directory server port
             network: Bitcoin network (mainnet, testnet, signet, regtest)
-            nick: JoinMarket nick (generated if None)
+            nick_identity: NickIdentity for message signing (generated if None)
             location: Our location string (onion address or NOT-SERVING-ONION)
             socks_host: SOCKS proxy host for Tor
             socks_port: SOCKS proxy port for Tor
@@ -161,7 +161,11 @@ class DirectoryClient:
         self.timeout = timeout
         self.max_message_size = max_message_size
         self.connection: TCPConnection | None = None
-        self.nick = nick or generate_jm_nick(JM_VERSION)
+        self.nick_identity = nick_identity or NickIdentity(JM_VERSION)
+        self.nick = self.nick_identity.nick
+        # hostid is used for message signing to prevent replay attacks
+        # For onion-based networks, this is always "onion-network"
+        self.hostid = "onion-network"
         self.offers: dict[tuple[str, int], Offer] = {}
         self.bonds: dict[str, FidelityBond] = {}
         self.running = False
@@ -588,20 +592,41 @@ class DirectoryClient:
         }
         await self.connection.send(json.dumps(pubmsg).encode("utf-8"))
 
-    async def send_private_message(self, recipient: str, message: str) -> None:
+    async def send_private_message(self, recipient: str, command: str, data: str) -> None:
         """
-        Send a private message to a specific peer.
+        Send a signed private message to a specific peer.
+
+        JoinMarket requires all private messages to be signed with the sender's
+        nick private key. The signature is appended to the message:
+        Format: "!<command> <data> <pubkey_hex> <signature>"
+
+        The message-to-sign is: data + hostid (to prevent replay attacks)
+        Note: Only the data is signed, NOT the command prefix.
 
         Args:
             recipient: Target peer nick
-            message: Message to send
+            command: Command name (without ! prefix, e.g., 'fill', 'auth', 'tx')
+            data: Command arguments to send (will be signed)
         """
         if not self.connection:
             raise DirectoryClientError("Not connected")
 
+        # Sign just the data (not the command) with our nick identity
+        # Reference: rawmessage = ' '.join(message[1:].split(' ')[1:-2])
+        # This means they extract [1:-2] which is the args, not the command
+        # So we sign: data + hostid
+        signed_data = self.nick_identity.sign_message(data, self.hostid)
+
+        # JoinMarket message format: from_nick!to_nick!command <args>
+        # The COMMAND_PREFIX ("!") is used ONLY as a field separator between
+        # from_nick, to_nick, and the message content. The command itself
+        # does NOT have a "!" prefix.
+        # Format: "<command> <signed_data>" where signed_data = "<data> <pubkey_hex> <sig_b64>"
+        full_message = f"{command} {signed_data}"
+
         privmsg = {
             "type": MessageType.PRIVMSG.value,
-            "line": f"{self.nick}!{recipient}!{message}",
+            "line": f"{self.nick}!{recipient}!{full_message}",
         }
         await self.connection.send(json.dumps(privmsg).encode("utf-8"))
 
