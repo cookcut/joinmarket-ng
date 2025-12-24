@@ -9,6 +9,20 @@ const OFFER_TYPE_NAMES = {
     'swreloffer': 'SWA Relative'
 };
 
+const FEATURE_DISPLAY_NAMES = {
+    'neutrino_compat': 'NEU',
+    'push_encrypted': 'PEN',
+    'peerlist_features': 'PLF',
+    'legacy': 'REF'
+};
+
+const FEATURE_COLORS = {
+    'neutrino_compat': '#3fb950',
+    'push_encrypted': '#a371f7',
+    'peerlist_features': '#58a6ff',
+    'legacy': '#6e7681'
+};
+
 const DIRECTORY_COLORS = [
     '#3498db', '#e74c3c', '#2ecc71', '#f39c12', '#9b59b6',
     '#1abc9c', '#e67e22', '#34495e', '#16a085', '#c0392b',
@@ -38,6 +52,7 @@ async function fetchOrderbook() {
         orderbookData = await response.json();
         updateStats();
         updateDirectoryBreakdown();
+        updateFeatureBreakdown();
         updateDirectoryFilter();
         renderTable();
         updateLastUpdate();
@@ -50,10 +65,12 @@ function updateStats() {
     if (!orderbookData) return;
 
     const bondsCount = orderbookData.offers.filter(o => o.fidelity_bond_data).length;
+    const uniqueMakers = new Set(orderbookData.offers.map(o => o.counterparty)).size;
 
     document.getElementById('total-offers').textContent = orderbookData.offers.length;
     document.getElementById('directory-nodes').textContent = orderbookData.directory_nodes.length;
     document.getElementById('fidelity-bonds').textContent = bondsCount;
+    document.getElementById('unique-makers').textContent = uniqueMakers;
 }
 
 function updateDirectoryBreakdown() {
@@ -153,6 +170,66 @@ function updateDirectoryBreakdown() {
         item.appendChild(infoContainer);
         breakdown.appendChild(item);
     });
+}
+
+function updateFeatureBreakdown() {
+    if (!orderbookData) return;
+
+    const breakdown = document.getElementById('feature-breakdown');
+    breakdown.innerHTML = '';
+
+    const featureStats = orderbookData.feature_stats || {};
+    const uniqueMakers = new Set(orderbookData.offers.map(o => o.counterparty)).size;
+
+    // Sort features: legacy first, then by count descending
+    const sortedFeatures = Object.entries(featureStats).sort((a, b) => {
+        if (a[0] === 'legacy') return -1;
+        if (b[0] === 'legacy') return 1;
+        return b[1] - a[1];
+    });
+
+    sortedFeatures.forEach(([feature, count]) => {
+        const item = document.createElement('div');
+        item.className = 'feature-item';
+
+        const nameContainer = document.createElement('div');
+        nameContainer.className = 'feature-name-container';
+
+        const badge = document.createElement('span');
+        badge.className = 'feature-badge';
+        badge.style.backgroundColor = FEATURE_COLORS[feature] || '#6e7681';
+        badge.textContent = FEATURE_DISPLAY_NAMES[feature] || feature;
+        badge.title = feature;
+
+        nameContainer.appendChild(badge);
+
+        const infoContainer = document.createElement('div');
+        infoContainer.className = 'feature-info';
+
+        const countSpan = document.createElement('span');
+        countSpan.className = 'feature-count';
+        countSpan.textContent = `${count} maker${count !== 1 ? 's' : ''}`;
+        infoContainer.appendChild(countSpan);
+
+        if (uniqueMakers > 0) {
+            const percentage = document.createElement('span');
+            percentage.className = 'feature-percentage';
+            percentage.textContent = `${Math.round((count / uniqueMakers) * 100)}%`;
+            infoContainer.appendChild(percentage);
+        }
+
+        item.appendChild(nameContainer);
+        item.appendChild(infoContainer);
+        breakdown.appendChild(item);
+    });
+
+    // If no features at all, show a message
+    if (sortedFeatures.length === 0 && uniqueMakers > 0) {
+        const noFeatures = document.createElement('div');
+        noFeatures.className = 'feature-item';
+        noFeatures.innerHTML = '<span class="feature-no-data">No feature data available yet</span>';
+        breakdown.appendChild(noFeatures);
+    }
 }
 
 function updateDirectoryFilter() {
@@ -338,6 +415,20 @@ function renderTable() {
             return `<span class="dir-badge" style="background-color: ${color}" title="${node}">${abbr}</span>`;
         }).join('');
 
+        // Generate feature badges
+        const features = offer.features || {};
+        const featureKeys = Object.keys(features).filter(k => features[k]);
+        let featureBadges;
+        if (featureKeys.length === 0) {
+            featureBadges = `<span class="feature-badge feature-legacy" title="Reference implementation (no features)">Ref</span>`;
+        } else {
+            featureBadges = featureKeys.map(feature => {
+                const displayName = FEATURE_DISPLAY_NAMES[feature] || feature.substring(0, 8);
+                const color = FEATURE_COLORS[feature] || '#6e7681';
+                return `<span class="feature-badge" style="background-color: ${color}" title="${feature}">${displayName}</span>`;
+            }).join('');
+        }
+
         row.innerHTML = `
             <td class="${typeClass}">${OFFER_TYPE_NAMES[offer.ordertype]}</td>
             <td class="counterparty">${offer.counterparty}</td>
@@ -346,6 +437,7 @@ function renderTable() {
             <td>${formatNumber(offer.minsize)}</td>
             <td>${formatNumber(offer.maxsize)}</td>
             <td class="${hasBond}">${bondValue}</td>
+            <td class="feature-badges">${featureBadges}</td>
             <td class="directory-badges">${directoryBadges}</td>
         `;
 

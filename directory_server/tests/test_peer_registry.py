@@ -131,6 +131,66 @@ def test_get_peerlist_for_network(registry):
     assert peerlist[0] == ("peer1", peer.location_string)
 
 
+def test_get_peerlist_includes_not_serving_onion(registry):
+    """Test that NOT-SERVING-ONION peers are included in peerlist on all networks."""
+    passive_peer = PeerInfo(
+        nick="taker1",
+        onion_address="NOT-SERVING-ONION",
+        port=-1,
+        network=NetworkType.MAINNET,
+        status=PeerStatus.HANDSHAKED,
+    )
+    active_peer = PeerInfo(
+        nick="maker1",
+        onion_address=f"{'a' * 56}.onion",
+        port=5222,
+        network=NetworkType.MAINNET,
+        status=PeerStatus.HANDSHAKED,
+    )
+
+    registry.register(passive_peer)
+    registry.register(active_peer)
+
+    # Peerlist should include both - even NOT-SERVING-ONION peers are useful
+    # as they can be reached via the directory for private messages
+    peerlist = registry.get_peerlist_for_network(NetworkType.MAINNET)
+    assert len(peerlist) == 2
+    nicks = {p[0] for p in peerlist}
+    assert nicks == {"taker1", "maker1"}
+
+
+def test_get_peerlist_with_features_includes_not_serving_onion(registry):
+    """Test that NOT-SERVING-ONION peers are included in peerlist with features."""
+    passive_peer = PeerInfo(
+        nick="taker1",
+        onion_address="NOT-SERVING-ONION",
+        port=-1,
+        network=NetworkType.MAINNET,
+        status=PeerStatus.HANDSHAKED,
+        features={"peerlist_features": True},
+    )
+    active_peer = PeerInfo(
+        nick="maker1",
+        onion_address=f"{'a' * 56}.onion",
+        port=5222,
+        network=NetworkType.MAINNET,
+        status=PeerStatus.HANDSHAKED,
+        features={"peerlist_features": True, "neutrino_compat": True},
+    )
+
+    registry.register(passive_peer)
+    registry.register(active_peer)
+
+    # Peerlist should include both types
+    peerlist = registry.get_peerlist_with_features(NetworkType.MAINNET)
+    assert len(peerlist) == 2
+    nicks = {p[0] for p in peerlist}
+    assert nicks == {"taker1", "maker1"}
+    # Verify both have features
+    for _nick, _location, features in peerlist:
+        assert "peerlist_features" in features.features
+
+
 def test_clear(registry, sample_peer):
     registry.register(sample_peer)
     registry.clear()

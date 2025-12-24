@@ -80,9 +80,10 @@ class OrderbookServer:
             if node_str not in directory_stats:
                 directory_stats[node_str] = {"offer_count": 0, "bond_offer_count": 0}
 
-        for node_id, status in self.aggregator.node_statuses.items():
-            if node_id in directory_stats:
-                directory_stats[node_id].update(status.to_dict(orderbook.timestamp))
+        for status_node_id, status in self.aggregator.node_statuses.items():
+            status_node_str = f"{status_node_id[0]}:{status_node_id[1]}"
+            if status_node_str in directory_stats:
+                directory_stats[status_node_str].update(status.to_dict(orderbook.timestamp))
 
         grouped_offers: dict[tuple[str, int], dict[str, Any]] = {}
         for offer in orderbook.offers:
@@ -99,12 +100,32 @@ class OrderbookServer:
                     "fidelity_bond_value": offer.fidelity_bond_value,
                     "directory_nodes": [offer.directory_node] if offer.directory_node else [],
                     "fidelity_bond_data": offer.fidelity_bond_data,
+                    "features": offer.features,
                 }
             elif (
                 offer.directory_node
                 and offer.directory_node not in grouped_offers[key]["directory_nodes"]
             ):
                 grouped_offers[key]["directory_nodes"].append(offer.directory_node)
+                # Merge features from multiple directories
+                for feature, value in offer.features.items():
+                    if value:
+                        grouped_offers[key]["features"][feature] = value
+
+        # Calculate feature statistics
+        feature_stats: dict[str, int] = {}
+        unique_makers = set()
+        for offer_data in grouped_offers.values():
+            counterparty = offer_data["counterparty"]
+            if counterparty not in unique_makers:
+                unique_makers.add(counterparty)
+                features = offer_data.get("features", {})
+                for feature, value in features.items():
+                    if value:
+                        feature_stats[feature] = feature_stats.get(feature, 0) + 1
+                # Track makers without any features (legacy/reference implementation)
+                if not features:
+                    feature_stats["legacy"] = feature_stats.get("legacy", 0) + 1
 
         return {
             "timestamp": orderbook.timestamp.isoformat(),
@@ -126,6 +147,7 @@ class OrderbookServer:
             ],
             "directory_nodes": orderbook.directory_nodes,
             "directory_stats": directory_stats,
+            "feature_stats": feature_stats,
             "mempool_url": self.settings.mempool_web_url
             or self.settings.mempool_api_url.replace("/api", ""),
             "mempool_onion_url": self.settings.mempool_web_onion_url,

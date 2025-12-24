@@ -29,6 +29,16 @@
                 <div class="stat-label">Fidelity Bonds</div>
                 <div class="stat-value" id="fidelity-bonds">0</div>
             </div>
+            <div class="stat-card">
+                <div class="stat-label">Unique Makers</div>
+                <div class="stat-value" id="unique-makers">0</div>
+            </div>
+        </div>
+
+        <div class="feature-stats">
+            <h2>Protocol Features</h2>
+            <p class="feature-stats-description">Feature support among unique makers (peers without features use the reference implementation)</p>
+            <div id="feature-breakdown"></div>
         </div>
 
         <div class="directory-stats">
@@ -63,6 +73,7 @@
                         <th class="sortable" data-sort="minsize">Min Size (sats)</th>
                         <th class="sortable" data-sort="maxsize">Max Size (sats)</th>
                         <th class="sortable" data-sort="fidelity_bond_value">Bond Value</th>
+                        <th>Features</th>
                         <th>Directories</th>
                     </tr>
                 </thead>

@@ -510,6 +510,18 @@ class NeutrinoBackend(BlockchainBackend):
         """
         return True
 
+    def can_provide_neutrino_metadata(self) -> bool:
+        """
+        Neutrino backend cannot reliably provide metadata for all UTXOs.
+
+        Light clients can only provide metadata for UTXOs they've been watching.
+        They cannot provide metadata for arbitrary addresses like full nodes can.
+
+        Returns:
+            False - Neutrino cannot provide metadata for arbitrary UTXOs
+        """
+        return False
+
     async def verify_utxo_with_metadata(
         self,
         txid: str,

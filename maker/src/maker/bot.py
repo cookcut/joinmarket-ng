@@ -170,6 +170,11 @@ class MakerBot:
                     # Otherwise, use NOT-SERVING-ONION
                     location = self.config.onion_host or "NOT-SERVING-ONION"
 
+                    # Advertise neutrino_compat if our backend can provide extended UTXO metadata.
+                    # This tells Neutrino takers that we can provide scriptpubkey and blockheight.
+                    # Full nodes (Bitcoin Core) can provide this; light clients (Neutrino) cannot.
+                    neutrino_compat = self.backend.can_provide_neutrino_metadata()
+
                     # Create DirectoryClient with SOCKS config for Tor connections
                     client = DirectoryClient(
                         host=host,
@@ -179,6 +184,7 @@ class MakerBot:
                         location=location,
                         socks_host=self.config.socks_host,
                         socks_port=self.config.socks_port,
+                        neutrino_compat=neutrino_compat,
                     )
 
                     await client.connect()

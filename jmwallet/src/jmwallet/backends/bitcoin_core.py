@@ -347,5 +347,17 @@ class BitcoinCoreBackend(BlockchainBackend):
             logger.error(f"Failed to get UTXO {txid}:{vout}: {e}")
             return None
 
+    def can_provide_neutrino_metadata(self) -> bool:
+        """
+        Bitcoin Core can provide Neutrino-compatible metadata.
+
+        Full node can access scriptpubkey and blockheight for all UTXOs,
+        allowing Neutrino takers to use our makers.
+
+        Returns:
+            True - Bitcoin Core always provides extended UTXO metadata
+        """
+        return True
+
     async def close(self) -> None:
         await self.client.aclose()

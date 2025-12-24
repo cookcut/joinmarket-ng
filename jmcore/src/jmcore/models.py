@@ -220,6 +220,10 @@ class Offer(BaseModel):
         default=False,
         description="Maker requires extended UTXO format (neutrino-compatible backend)",
     )
+    features: dict[str, bool] = Field(
+        default_factory=dict,
+        description="Features supported by this maker (from handshake)",
+    )
 
     @field_validator("cjfee")
     @classmethod

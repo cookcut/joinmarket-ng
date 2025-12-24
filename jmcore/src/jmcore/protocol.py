@@ -73,15 +73,17 @@ NICK_MAX_ENCODED = 14
 # Feature flag constants
 FEATURE_NEUTRINO_COMPAT = "neutrino_compat"
 FEATURE_PUSH_ENCRYPTED = "push_encrypted"
+FEATURE_PEERLIST_FEATURES = "peerlist_features"  # Supports extended peerlist with F: suffix
 
 # Feature dependencies: feature -> list of required features
 FEATURE_DEPENDENCIES: dict[str, list[str]] = {
     FEATURE_NEUTRINO_COMPAT: [],
     FEATURE_PUSH_ENCRYPTED: [],  # Requires NaCl session, but that's implicit
+    FEATURE_PEERLIST_FEATURES: [],  # No dependencies
 }
 
 # All known features
-ALL_FEATURES = {FEATURE_NEUTRINO_COMPAT, FEATURE_PUSH_ENCRYPTED}
+ALL_FEATURES = {FEATURE_NEUTRINO_COMPAT, FEATURE_PUSH_ENCRYPTED, FEATURE_PEERLIST_FEATURES}
 
 
 @dataclass
@@ -133,6 +135,10 @@ class FeatureSet:
     def supports_push_encrypted(self) -> bool:
         """Check if push_encrypted is supported."""
         return FEATURE_PUSH_ENCRYPTED in self.features
+
+    def supports_peerlist_features(self) -> bool:
+        """Check if peer supports extended peerlist with features (F: suffix)."""
+        return FEATURE_PEERLIST_FEATURES in self.features
 
     def validate_dependencies(self) -> tuple[bool, str]:
         """Check that all feature dependencies are satisfied."""

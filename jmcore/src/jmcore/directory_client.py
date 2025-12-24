@@ -27,7 +27,10 @@ from jmcore.models import FidelityBond, Offer, OfferType
 from jmcore.network import TCPConnection, connect_direct, connect_via_tor
 from jmcore.protocol import (
     COMMAND_PREFIX,
+    FEATURE_NEUTRINO_COMPAT,
+    FEATURE_PEERLIST_FEATURES,
     JM_VERSION,
+    FeatureSet,
     MessageType,
     create_handshake_request,
     parse_peerlist_entry,
@@ -168,6 +171,7 @@ class DirectoryClient:
         self.hostid = "onion-network"
         self.offers: dict[tuple[str, int], Offer] = {}
         self.bonds: dict[str, FidelityBond] = {}
+        self.peer_features: dict[str, dict[str, bool]] = {}  # nick -> features dict
         self.running = False
         self.on_disconnect = on_disconnect
         self.initial_orderbook_received = False
@@ -178,6 +182,7 @@ class DirectoryClient:
         # Version negotiation state (set after handshake)
         self.negotiated_version: int | None = None
         self.directory_neutrino_compat: bool = False
+        self.directory_peerlist_features: bool = False  # True if directory supports F: suffix
 
         # Timing intervals
         self.peerlist_check_interval = 1800.0
@@ -230,13 +235,20 @@ class DirectoryClient:
         if not self.connection:
             raise DirectoryClientError("Not connected")
 
+        # Build our feature set - always include peerlist_features to indicate we support
+        # the extended peerlist format with F: suffix for feature information
+        our_features: set[str] = {FEATURE_PEERLIST_FEATURES}
+        if self.neutrino_compat:
+            our_features.add(FEATURE_NEUTRINO_COMPAT)
+        feature_set = FeatureSet(features=our_features)
+
         # Send our handshake with current version and features
         handshake_data = create_handshake_request(
             nick=self.nick,
             location=self.location,
             network=self.network,
             directory=False,
-            neutrino_compat=self.neutrino_compat,
+            features=feature_set,
         )
         logger.debug(f"DirectoryClient._handshake: created handshake data: {handshake_data}")
         handshake_msg = {
@@ -282,10 +294,15 @@ class DirectoryClient:
         # Check if directory supports Neutrino-compatible metadata
         self.directory_neutrino_compat = peer_supports_neutrino_compat(handshake_response)
 
+        # Check if directory supports peerlist_features (extended peerlist with F: suffix)
+        dir_features = handshake_response.get("features", {})
+        self.directory_peerlist_features = dir_features.get(FEATURE_PEERLIST_FEATURES, False)
+
         logger.info(
             f"Handshake successful with {self.host}:{self.port} (nick: {self.nick}, "
             f"negotiated_version: v{self.negotiated_version}, "
-            f"neutrino_compat: {self.directory_neutrino_compat})"
+            f"neutrino_compat: {self.directory_neutrino_compat}, "
+            f"peerlist_features: {self.directory_peerlist_features})"
         )
 
     async def get_peerlist(self) -> list[str]:
@@ -349,6 +366,81 @@ class DirectoryClient:
                 continue
 
         logger.info(f"Received {len(peers)} active peers from {self.host}:{self.port}")
+        return peers
+
+    async def get_peerlist_with_features(self) -> list[tuple[str, str, FeatureSet]]:
+        """
+        Fetch the current list of connected peers with their features.
+
+        Uses the standard GETPEERLIST message. If the directory supports
+        peerlist_features, the response will include F: suffix with features.
+
+        Returns:
+            List of (nick, location, features) tuples for active peers.
+            Features will be empty for directories that don't support peerlist_features.
+        """
+        if not self.connection:
+            raise DirectoryClientError("Not connected")
+
+        getpeerlist_msg = {"type": MessageType.GETPEERLIST.value, "line": ""}
+        logger.debug("Sending GETPEERLIST request (with features support)")
+        await self.connection.send(json.dumps(getpeerlist_msg).encode("utf-8"))
+
+        start_time = asyncio.get_event_loop().time()
+        response = None
+
+        while True:
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed > self.timeout:
+                raise DirectoryClientError("Timed out waiting for PEERLIST response")
+
+            try:
+                response_data = await asyncio.wait_for(
+                    self.connection.receive(), timeout=self.timeout - elapsed
+                )
+                response = json.loads(response_data.decode("utf-8"))
+                msg_type = response.get("type")
+                logger.debug(f"Received response type: {msg_type}")
+
+                if msg_type == MessageType.PEERLIST.value:
+                    break
+
+                logger.debug(
+                    f"Skipping unexpected message type {msg_type} while waiting for PEERLIST"
+                )
+            except TimeoutError as e:
+                raise DirectoryClientError("Timed out waiting for PEERLIST response") from e
+            except Exception as e:
+                logger.warning(f"Error receiving/parsing message while waiting for PEERLIST: {e}")
+                if asyncio.get_event_loop().time() - start_time > self.timeout:
+                    raise DirectoryClientError(f"Failed to get PEERLIST: {e}") from e
+
+        peerlist_str = response["line"]
+        logger.debug(f"Peerlist string: {peerlist_str}")
+
+        if not peerlist_str:
+            return []
+
+        peers: list[tuple[str, str, FeatureSet]] = []
+        for entry in peerlist_str.split(","):
+            try:
+                nick, location, disconnected, features = parse_peerlist_entry(entry)
+                logger.debug(
+                    f"Parsed peer: {nick} at {location}, "
+                    f"disconnected={disconnected}, features={features.to_comma_string()}"
+                )
+                if not disconnected:
+                    peers.append((nick, location, features))
+                    # Also update peer_features cache
+                    if features:
+                        self.peer_features[nick] = features.to_dict()
+            except ValueError as e:
+                logger.warning(f"Failed to parse peerlist entry '{entry}': {e}")
+                continue
+
+        logger.info(
+            f"Received {len(peers)} active peers with features from {self.host}:{self.port}"
+        )
         return peers
 
     async def listen_for_messages(self, duration: float = 5.0) -> list[dict[str, Any]]:
@@ -415,19 +507,20 @@ class DirectoryClient:
         Returns:
             Tuple of (offers, fidelity_bonds)
         """
-        peers = await self.get_peerlist()
+        # Use get_peerlist_with_features to populate peer_features cache
+        peers_with_features = await self.get_peerlist_with_features()
         offers: list[Offer] = []
         bonds: list[FidelityBond] = []
         bond_utxo_set: set[str] = set()
 
         # NOTE: Peerlist may be empty if all makers use NOT-SERVING-ONION (regtest/local).
         # We still broadcast !orderbook because makers will respond via the directory.
-        if not peers:
+        if not peers_with_features:
             logger.info(
                 f"Peerlist empty on {self.host}:{self.port} (makers may be NOT-SERVING-ONION)"
             )
         else:
-            logger.info(f"Found {len(peers)} peers on {self.host}:{self.port}")
+            logger.info(f"Found {len(peers_with_features)} peers on {self.host}:{self.port}")
 
         if not self.connection:
             raise DirectoryClientError("Not connected")
@@ -547,6 +640,7 @@ class DirectoryClient:
                                 cjfee=cjfee,
                                 fidelity_bond_value=0,
                                 neutrino_compat=neutrino_compat,
+                                features=self.peer_features.get(from_nick, {}),
                             )
                             offers.append(offer)
 
@@ -665,6 +759,14 @@ class DirectoryClient:
         logger.info(f"Starting continuous listening on {self.host}:{self.port}")
         self.running = True
 
+        # Fetch peerlist with features to populate peer_features cache
+        # This allows us to know which features each maker supports
+        try:
+            await self.get_peerlist_with_features()
+            logger.info(f"Populated peer_features cache with {len(self.peer_features)} peers")
+        except Exception as e:
+            logger.warning(f"Failed to fetch peerlist with features: {e}")
+
         # Request current orderbook from makers
         if request_orderbook:
             try:
@@ -700,6 +802,17 @@ class DirectoryClient:
                             rest = COMMAND_PREFIX.join(parts[2:])
 
                             if to_nick == "PUBLIC":
+                                # If we don't have features for this peer, refresh peerlist
+                                if from_nick not in self.peer_features:
+                                    try:
+                                        await self.get_peerlist_with_features()
+                                        logger.debug(
+                                            f"Refreshed peerlist (new peer: {from_nick}), "
+                                            f"now tracking {len(self.peer_features)} peers"
+                                        )
+                                    except Exception as e:
+                                        logger.debug(f"Failed to refresh peerlist: {e}")
+
                                 # Parse offer announcements
                                 for offer_type_prefix in [
                                     "sw0reloffer",
@@ -775,6 +888,7 @@ class DirectoryClient:
                                                     cjfee=cjfee,
                                                     fidelity_bond_value=0,
                                                     fidelity_bond_data=bond_data,
+                                                    features=self.peer_features.get(from_nick, {}),
                                                 )
 
                                                 # Update cache using tuple key

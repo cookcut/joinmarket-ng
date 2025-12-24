@@ -56,11 +56,13 @@ class MultiDirectoryClient:
         directory_servers: list[str],
         network: str,
         nick_identity: NickIdentity,
+        neutrino_compat: bool = False,
     ):
         self.directory_servers = directory_servers
         self.network = network
         self.nick_identity = nick_identity
         self.nick = nick_identity.nick
+        self.neutrino_compat = neutrino_compat
         self.clients: dict[str, DirectoryClient] = {}
         self._response_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 
@@ -78,6 +80,7 @@ class MultiDirectoryClient:
                     port=port,
                     network=self.network,
                     nick_identity=self.nick_identity,
+                    neutrino_compat=self.neutrino_compat,
                 )
                 await client.connect()
                 self.clients[server] = client
@@ -269,11 +272,17 @@ class Taker:
         self.nick = self.nick_identity.nick
         self.state = TakerState.IDLE
 
+        # Advertise neutrino_compat if our backend can provide extended UTXO metadata.
+        # This tells other peers that we can provide scriptpubkey and blockheight.
+        # Full nodes (Bitcoin Core) can provide this; light clients (Neutrino) cannot.
+        neutrino_compat = backend.can_provide_neutrino_metadata()
+
         # Directory client
         self.directory_client = MultiDirectoryClient(
             directory_servers=config.directory_servers,
             network=config.network.value,
             nick_identity=self.nick_identity,
+            neutrino_compat=neutrino_compat,
         )
 
         # Orderbook manager

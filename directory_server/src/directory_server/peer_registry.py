@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 
 from jmcore.models import NetworkType, PeerInfo, PeerStatus
+from jmcore.protocol import FeatureSet
 from loguru import logger
 
 
@@ -87,11 +88,25 @@ class PeerRegistry:
 
     def get_peerlist_for_network(self, network: NetworkType) -> list[tuple[str, str]]:
         # Use generator to avoid intermediate list
-        return [
-            (peer.nick, peer.location_string)
-            for peer in self._iter_connected(network)
-            if peer.onion_address != "NOT-SERVING-ONION"
-        ]
+        # Include all connected peers, even NOT-SERVING-ONION
+        # While they can't be directly connected to, they are reachable via the directory
+        # for private messages, so this information is useful
+        return [(peer.nick, peer.location_string) for peer in self._iter_connected(network)]
+
+    def get_peerlist_with_features(self, network: NetworkType) -> list[tuple[str, str, FeatureSet]]:
+        """
+        Get peerlist with features for peers on a network.
+
+        Returns list of (nick, location, features) tuples for connected peers.
+        Includes all peers, even NOT-SERVING-ONION, as they are still reachable
+        via the directory for private messaging.
+        """
+        result = []
+        for peer in self._iter_connected(network):
+            # Build FeatureSet from peer.features dict
+            features = FeatureSet(features={k for k, v in peer.features.items() if v is True})
+            result.append((peer.nick, peer.location_string, features))
+        return result
 
     def count(self) -> int:
         return len(self._peers)
@@ -123,6 +138,8 @@ class PeerRegistry:
         passive = 0
         active = 0
         neutrino_compat = 0
+        peerlist_features = 0
+        push_encrypted = 0
 
         for p in list(self._peers.values()):
             if p.status == PeerStatus.HANDSHAKED and not p.is_directory:
@@ -131,8 +148,14 @@ class PeerRegistry:
                     passive += 1
                 else:
                     active += 1
-                if p.neutrino_compat:
+                # Count feature support from features dict
+                features = p.features
+                if features.get("neutrino_compat"):
                     neutrino_compat += 1
+                if features.get("peerlist_features"):
+                    peerlist_features += 1
+                if features.get("push_encrypted"):
+                    push_encrypted += 1
 
         return {
             "total_peers": len(self._peers),
@@ -140,6 +163,8 @@ class PeerRegistry:
             "passive_peers": passive,
             "active_peers": active,
             "neutrino_compat_peers": neutrino_compat,
+            "peerlist_features_peers": peerlist_features,
+            "push_encrypted_peers": push_encrypted,
         }
 
     def get_neutrino_compat_peers(self, network: NetworkType | None = None) -> list[PeerInfo]:
