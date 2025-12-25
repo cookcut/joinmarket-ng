@@ -853,9 +853,14 @@ class DirectoryClient:
                                             if bond_parts:
                                                 bond_proof_b64 = bond_parts[0]
                                                 # For PUBLIC announcements, maker uses their own nick
-                                                # as taker_nick when creating the proof
+                                                # as taker_nick when creating the proof.
+                                                # For PRIVMSG (response to !orderbook), maker signs
+                                                # for the recipient (us).
+                                                taker_nick_for_proof = (
+                                                    from_nick if to_nick == "PUBLIC" else to_nick
+                                                )
                                                 bond_data = parse_fidelity_bond_proof(
-                                                    bond_proof_b64, from_nick, from_nick
+                                                    bond_proof_b64, from_nick, taker_nick_for_proof
                                                 )
                                                 if bond_data:
                                                     logger.debug(

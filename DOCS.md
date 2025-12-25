@@ -1337,6 +1337,18 @@ def verify_fidelity_bond_proof(proof_base64, maker_nick, taker_nick):
     # ...
 ```
 
+### Nick Signature Context (PUBMSG vs PRIVMSG)
+
+The `taker_nick` used for verification depends on the context:
+
+- **Public Offers (PUBMSG)**: The maker self-signs the proof using their own nick as `taker_nick`.
+  - Verifier uses: `verify_fidelity_bond_proof(proof, maker_nick, maker_nick)`
+
+- **Private Offers (PRIVMSG)**: The maker signs the proof specifically for the requesting taker.
+  - Verifier uses: `verify_fidelity_bond_proof(proof, maker_nick, my_nick)`
+
+This distinction is crucial for interoperability with reference implementation makers, which respond to `!orderbook` via PRIVMSG.
+
 ### Public Key Disclosure and Quantum Computing Considerations
 
 **Public Key Visibility**: The fidelity bond's public key is disclosed in the P2P orderbook, not on the blockchain.
