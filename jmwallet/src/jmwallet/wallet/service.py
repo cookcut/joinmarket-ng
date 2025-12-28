@@ -554,20 +554,46 @@ class WalletService:
         return total
 
     def select_utxos(
-        self, mixdepth: int, target_amount: int, min_confirmations: int = 1
+        self,
+        mixdepth: int,
+        target_amount: int,
+        min_confirmations: int = 1,
+        include_utxos: list[UTXOInfo] | None = None,
     ) -> list[UTXOInfo]:
         """
         Select UTXOs for spending from a mixdepth.
         Uses simple greedy selection strategy.
+
+        Args:
+            mixdepth: Mixdepth to select from
+            target_amount: Target amount in satoshis
+            min_confirmations: Minimum confirmations required
+            include_utxos: List of UTXOs that MUST be included in selection
         """
         utxos = self.utxo_cache.get(mixdepth, [])
 
         eligible = [utxo for utxo in utxos if utxo.confirmations >= min_confirmations]
 
+        # Filter out included UTXOs from eligible pool to avoid duplicates
+        included_txid_vout = set()
+        if include_utxos:
+            included_txid_vout = {(u.txid, u.vout) for u in include_utxos}
+            eligible = [u for u in eligible if (u.txid, u.vout) not in included_txid_vout]
+
         eligible.sort(key=lambda u: u.value, reverse=True)
 
         selected = []
         total = 0
+
+        # Add mandatory UTXOs first
+        if include_utxos:
+            for utxo in include_utxos:
+                selected.append(utxo)
+                total += utxo.value
+
+        if total >= target_amount:
+            # Already enough with mandatory UTXOs
+            return selected
 
         for utxo in eligible:
             selected.append(utxo)

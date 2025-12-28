@@ -460,9 +460,7 @@ class TestNeutrinoCoinJoin:
 
     @pytest.mark.slow
     @pytest.mark.flaky(reruns=3, reruns_delay=10)
-    async def test_coinjoin_with_neutrino_taker(
-        self, neutrino_backend, fresh_docker_makers
-    ):
+    async def test_coinjoin_with_neutrino_taker(self, neutrino_backend):
         """Test that a taker using neutrino can initiate CoinJoin.
 
         This test verifies:

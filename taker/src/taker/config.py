@@ -82,7 +82,12 @@ class TakerConfig(BaseModel):
     )
 
     # PoDLE settings
-    taker_utxo_retries: int = Field(default=10, ge=1, le=10)
+    taker_utxo_retries: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum PoDLE index retries per UTXO (reference: 3)",
+    )
     taker_utxo_age: int = Field(default=5, ge=1, description="Minimum UTXO confirmations")
     taker_utxo_amtpercent: int = Field(
         default=20, ge=1, le=100, description="Min UTXO value as % of CJ amount"

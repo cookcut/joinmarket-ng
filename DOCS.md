@@ -72,7 +72,8 @@ JoinMarket NG uses a dedicated data directory for persistent files that need to 
 ```
 ~/.joinmarket-ng/          (or $JOINMARKET_DATA_DIR)
 ├── cmtdata/
-│   └── commitmentlist     PoDLE commitment blacklist (shared network-wide)
+│   ├── commitmentlist     PoDLE commitment blacklist (makers, network-wide)
+│   └── commitments.json   PoDLE used commitments (takers, local tracking)
 └── coinjoin_history.csv   CoinJoin transaction history log
 ```
 
@@ -94,10 +95,16 @@ JoinMarket NG uses a dedicated data directory for persistent files that need to 
 ### Shared Files
 
 **Commitment Blacklist** (`cmtdata/commitmentlist`):
-- Shared between all makers and takers on the same machine
-- Prevents PoDLE commitment reuse across instances
+- Used by **makers** to track network-wide blacklisted commitments
+- Prevents the same commitment from being accepted by multiple makers
 - Synchronized via `!hp2` protocol messages network-wide
 - ASCII format: one commitment per line (hex string)
+
+**Used Commitments** (`cmtdata/commitments.json`):
+- Used by **takers** to track their own used commitments
+- Prevents takers from reusing the same commitment across retries
+- JSON format compatible with reference implementation
+- Contains `used` array (commitment hashes) and `external` dict (reserved)
 
 **CoinJoin History** (`coinjoin_history.csv`):
 - Records all CoinJoin transactions (both pending and confirmed)
@@ -1410,14 +1417,240 @@ e_check = sha256(Kg_check || Kj_check || P || P2)
 assert e_check == e
 ```
 
-### NUMS Point Generation
+### NUMS Point Index System
 
-NUMS points are precomputed for indices 0-9:
-```python
-NUMS[i] = hash_to_curve(sha256("joinmarket" + str(i)))
+NUMS (Nothing Up My Sleeve) points are deterministically derived alternate generator points used for the PoDLE commitment. Each index (0-9) produces a **different NUMS point**, and thus a **different commitment** for the same UTXO.
+
+**Why Different Indices Produce Different Commitments:**
+
+```
+P2 = k * J(index)
+
+Where:
+- k = UTXO private key (constant for a given UTXO)
+- J(index) = NUMS point at the given index (varies per index)
+- P2 = commitment point (varies per index)
+
+Since J(0) ≠ J(1) ≠ J(2) ..., even with the same k:
+- P2_0 = k * J(0) ≠ k * J(1) = P2_1
+- Commitment_0 = H(P2_0) ≠ H(P2_1) = Commitment_1
 ```
 
-Lower indices are preferred as they indicate the UTXO hasn't been used for many failed CoinJoins.
+**Index Usage Policy:**
+
+| Index | Meaning | Action |
+|-------|---------|--------|
+| 0 | First use of this UTXO | Preferred by takers (fresh UTXO) |
+| 1-2 | UTXO used in 1-2 failed CoinJoins | Acceptable by reference default (max_retries=3) |
+| 3+ | Beyond reference default limit | Only accepted if taker configures higher max_retries |
+
+**Configuration:**
+
+```toml
+[TAKER]
+# Maximum number of PoDLE index retries per UTXO (default: 3, matches reference)
+taker_utxo_retries = 3  # Allows indices 0,1,2
+```
+
+**Our Implementation:**
+
+We match the reference implementation's PoDLE retry logic:
+
+1. **UTXO Deprioritization**: UTXOs are sorted by:
+   - Retry count (ascending) - UTXOs with fewer used indices are preferred
+   - Confirmations (descending) - Older UTXOs are better for privacy
+   - Value (descending) - Larger UTXOs provide stronger commitment
+
+2. **Retry Limit Enforcement**: UTXOs that have exhausted `taker_utxo_retries` indices are skipped
+
+3. **Commitment Tracking**: Used commitments are persisted to `~/.joinmarket-ng/cmtdata/commitments.json`
+
+**Example Flow:**
+
+```python
+# UTXO_A: 30 BTC, 10 confs, 0 retries (fresh)
+# UTXO_B: 25 BTC, 20 confs, 2 retries (indices 0,1 used)
+# Selection order: UTXO_A (fewer retries beats higher confirmations)
+
+# After 3 failed CoinJoins with UTXO_A (indices 0,1,2 used):
+# UTXO_A is now exhausted (retry_count=3 >= max_retries=3)
+# Next CoinJoin will use UTXO_B index 2
+```
+
+**Reference Implementation Behavior:**
+
+The reference implementation uses `get_podle_tries()` to determine the next available index:
+
+```python
+# Reference implementation logic (simplified)
+def get_podle_tries(utxo, priv, max_tries=3):
+    for i in reversed(range(max_tries)):
+        commitment = generate_podle(utxo, priv, index=i)
+        if commitment.hash in used_commitments:
+            return i + 1  # This index and below are used
+    return 0  # No indices used yet
+
+# Taker gets next available index
+tries = get_podle_tries(utxo, priv, max_tries=3)
+if tries >= max_tries:
+    # All indices exhausted, try next UTXO
+    continue
+next_index = tries  # Start from lowest unused index
+```
+
+**NUMS Point Generation Algorithm:**
+
+```python
+def get_nums_point(index):
+    """Generate NUMS point J(index) deterministically."""
+    for G in [compressed_G, uncompressed_G]:
+        seed = G + bytes([index])
+        for counter in range(256):
+            seed_c = seed + bytes([counter])
+            x = sha256(seed_c)
+            point = 0x02 + x  # Try even y-coordinate
+            if is_valid_curve_point(point):
+                return point
+```
+
+The precomputed NUMS points for indices 0-9 are hardcoded to avoid recomputation.
+
+### UTXO Selection for PoDLE
+
+Not all UTXOs are suitable for PoDLE commitments. The selection criteria ensure the commitment is credible and the UTXO is economically significant.
+
+**Eligibility Criteria:**
+
+| Criterion | Default | Rationale |
+|-----------|---------|-----------|
+| Minimum confirmations | 5 | Prevents double-spend attacks |
+| Minimum value (% of cj_amount) | 20% | Ensures economic stake |
+
+**Selection Priority:**
+
+UTXOs are sorted by preference (highest priority first):
+1. **Confirmations** (descending): Older UTXOs are more trustworthy
+2. **Value** (descending): Larger UTXOs show more skin in the game
+
+**Implementation:**
+
+```python
+# taker/src/taker/podle.py
+def get_eligible_podle_utxos(utxos, cj_amount, min_confirmations=5, min_percent=20):
+    min_value = cj_amount * min_percent / 100
+    eligible = [u for u in utxos
+                if u.confirmations >= min_confirmations
+                and u.value >= min_value]
+    eligible.sort(key=lambda u: (u.confirmations, u.value), reverse=True)
+    return eligible
+```
+
+**Important:** The UTXO used for PoDLE commitment should generally also be included as an input in the CoinJoin transaction, as it proves the taker controls funds being mixed.
+
+### Taker Commitment Tracking
+
+Takers must track which commitments they've used to avoid reusing the same commitment with different makers. This is stored locally in `cmtdata/commitments.json`.
+
+**File Format:**
+
+```json
+{
+  "used": [
+    "abc123...",  // H(P2) commitment hashes (hex)
+    "def456..."
+  ],
+  "external": {}  // Reserved for external commitment sources
+}
+```
+
+**File Location:**
+- `~/.joinmarket-ng/cmtdata/commitments.json` (or `$JOINMARKET_DATA_DIR/cmtdata/commitments.json`)
+
+**Tracking Flow:**
+
+```
+1. Taker prepares CoinJoin
+2. For each eligible UTXO (sorted by preference):
+   a. For each index (0-9):
+      - Generate commitment C = H(k * J(index))
+      - Check: is C in local used commitments?
+      - If not used: SELECT THIS, mark as used, save to file
+      - If used: try next index
+   b. If all indices exhausted: try next UTXO
+3. If no fresh commitment found: ERROR (need to wait for new UTXOs)
+```
+
+**Why Track Locally?**
+
+Even if a CoinJoin fails before `!auth` is sent, the taker should not reuse that commitment with a different maker—it could reveal linkage patterns.
+
+**Implementation Reference:**
+
+```python
+# taker/src/taker/podle_manager.py
+class PoDLEManager:
+    def generate_fresh_commitment(self, wallet_utxos, cj_amount, private_key_getter):
+        for utxo in get_eligible_podle_utxos(wallet_utxos, cj_amount):
+            for index in range(10):
+                commitment = generate_podle(privkey, utxo, index)
+                if commitment.hash not in self.used_commitments:
+                    self.used_commitments.add(commitment.hash)
+                    self._save()
+                    return commitment
+        return None  # All commitments exhausted
+```
+
+### Maker Commitment Blacklist
+
+Makers maintain a network-wide blacklist of commitments received via `!hp2` messages. This prevents the same commitment from being accepted by multiple makers.
+
+**File:** `cmtdata/commitmentlist` (one commitment hash per line)
+
+**Key Difference from Taker Tracking:**
+
+| Aspect | Taker Tracking | Maker Blacklist |
+|--------|---------------|-----------------|
+| File | `commitments.json` | `commitmentlist` |
+| Scope | Local (my own commitments) | Network-wide (all commitments) |
+| Source | Generated locally | Received via `!hp2` |
+| Purpose | Prevent self-reuse | Prevent network reuse |
+
+**When Makers Add to Blacklist:**
+
+1. **After successful `!auth` verification**: The maker broadcasts `!hp2` and adds to local blacklist
+2. **On receiving `!hp2` broadcast**: Add to blacklist (even without verifying the CoinJoin)
+
+### Commitment Retry Logic
+
+When a CoinJoin fails (e.g., maker offline, transaction timeout), the taker can retry with a fresh commitment.
+
+**Retry Strategy:**
+
+```
+Attempt 1: UTXO_A, index 0 → fails
+Attempt 2: UTXO_A, index 1 → fails (same UTXO, different index)
+Attempt 3: UTXO_A, index 2 → fails
+...
+Attempt 10: UTXO_A, index 9 → fails (all indices exhausted)
+Attempt 11: UTXO_B, index 0 → success (different UTXO)
+```
+
+**Why This Works:**
+
+1. **Different index = different commitment**: `H(k * J(0)) ≠ H(k * J(1))`
+2. **Maker rejection by index**: Makers may configure `max_tries` to reject high indices
+3. **UTXO rotation**: When all indices are exhausted, use a different UTXO
+
+**Configuration:**
+
+```python
+# Taker config
+min_podle_confirmations: int = 5   # Minimum UTXO age
+min_podle_percent: int = 20        # Minimum UTXO value as % of cj_amount
+
+# Maker config (reference implementation)
+taker_utxo_retries: int = 3        # Max index accepted (0-2)
+```
 
 ### Implementation Reference
 

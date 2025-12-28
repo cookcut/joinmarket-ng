@@ -46,3 +46,23 @@ def get_commitment_blacklist_path(data_dir: Path | None = None) -> Path:
     cmtdata_dir.mkdir(parents=True, exist_ok=True)
 
     return cmtdata_dir / "commitmentlist"
+
+
+def get_used_commitments_path(data_dir: Path | None = None) -> Path:
+    """
+    Get the path to the used commitments file (for takers).
+
+    Args:
+        data_dir: Optional data directory (defaults to get_default_data_dir())
+
+    Returns:
+        Path to cmtdata/commitments.json (compatible with reference JoinMarket)
+    """
+    if data_dir is None:
+        data_dir = get_default_data_dir()
+
+    # Use cmtdata/ subdirectory
+    cmtdata_dir = data_dir / "cmtdata"
+    cmtdata_dir.mkdir(parents=True, exist_ok=True)
+
+    return cmtdata_dir / "commitments.json"

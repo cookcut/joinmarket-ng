@@ -21,7 +21,7 @@ Reference: https://gist.github.com/AdamISZ/9cbba5e9408d23813ca8
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from jmcore.podle import (
     PoDLECommitment,
@@ -39,7 +39,7 @@ __all__ = [
     "PoDLECommitment",
     "PoDLEError",
     "generate_podle",
-    "generate_podle_for_coinjoin",
+    "get_eligible_podle_utxos",
     "select_podle_utxo",
     "serialize_revelation",
 ]
@@ -112,6 +112,31 @@ class ExtendedPoDLECommitment:
         return self.scriptpubkey is not None and self.blockheight is not None
 
 
+def get_eligible_podle_utxos(
+    utxos: list[UTXOInfo],
+    cj_amount: int,
+    min_confirmations: int = 5,
+    min_percent: int = 20,
+) -> list[UTXOInfo]:
+    """
+    Get all eligible UTXOs for PoDLE commitment, sorted by preference.
+
+    Criteria:
+    - Must have at least min_confirmations
+    - Must be at least min_percent of cj_amount
+
+    Returns:
+        List of eligible UTXOs sorted by (confirmations, value) descending
+    """
+    min_value = int(cj_amount * min_percent / 100)
+
+    eligible = [u for u in utxos if u.confirmations >= min_confirmations and u.value >= min_value]
+
+    # Prefer older UTXOs with more value
+    eligible.sort(key=lambda u: (u.confirmations, u.value), reverse=True)
+    return eligible
+
+
 def select_podle_utxo(
     utxos: list[UTXOInfo],
     cj_amount: int,
@@ -120,10 +145,6 @@ def select_podle_utxo(
 ) -> UTXOInfo | None:
     """
     Select the best UTXO for PoDLE commitment.
-
-    Criteria:
-    - Must have at least min_confirmations
-    - Must be at least min_percent of cj_amount
 
     Args:
         utxos: Available UTXOs
@@ -134,19 +155,15 @@ def select_podle_utxo(
     Returns:
         Best UTXO for PoDLE or None if no suitable UTXO
     """
-    min_value = int(cj_amount * min_percent / 100)
-
-    eligible = [u for u in utxos if u.confirmations >= min_confirmations and u.value >= min_value]
+    eligible = get_eligible_podle_utxos(utxos, cj_amount, min_confirmations, min_percent)
 
     if not eligible:
+        min_value = int(cj_amount * min_percent / 100)
         logger.warning(
             f"No suitable UTXOs for PoDLE: need {min_confirmations}+ confirmations "
             f"and value >= {min_value} sats ({min_percent}% of {cj_amount})"
         )
         return None
-
-    # Prefer older UTXOs with more value
-    eligible.sort(key=lambda u: (u.confirmations, u.value), reverse=True)
 
     selected = eligible[0]
     logger.info(
@@ -155,57 +172,3 @@ def select_podle_utxo(
     )
 
     return selected
-
-
-def generate_podle_for_coinjoin(
-    wallet_utxos: list[UTXOInfo],
-    cj_amount: int,
-    private_key_getter: Any,  # Callable[[str], bytes]
-    min_confirmations: int = 5,
-    min_percent: int = 20,
-    index: int = 0,
-) -> ExtendedPoDLECommitment | None:
-    """
-    Generate PoDLE for a CoinJoin transaction.
-
-    Args:
-        wallet_utxos: All wallet UTXOs
-        cj_amount: Target CoinJoin amount
-        private_key_getter: Function to get private key for address
-        min_confirmations: Minimum UTXO confirmations
-        min_percent: Minimum UTXO value as % of cj_amount
-        index: NUMS point index
-
-    Returns:
-        ExtendedPoDLECommitment with UTXO metadata or None if no suitable UTXO
-    """
-    utxo = select_podle_utxo(
-        utxos=wallet_utxos,
-        cj_amount=cj_amount,
-        min_confirmations=min_confirmations,
-        min_percent=min_percent,
-    )
-
-    if utxo is None:
-        return None
-
-    # Get private key for the UTXO's address
-    private_key = private_key_getter(utxo.address)
-    if private_key is None:
-        logger.error(f"Could not get private key for address {utxo.address}")
-        return None
-
-    utxo_str = f"{utxo.txid}:{utxo.vout}"
-
-    commitment = generate_podle(
-        private_key_bytes=private_key,
-        utxo_str=utxo_str,
-        index=index,
-    )
-
-    # Return extended commitment with UTXO metadata for neutrino_compat feature
-    return ExtendedPoDLECommitment(
-        commitment=commitment,
-        scriptpubkey=utxo.scriptpubkey,
-        blockheight=utxo.height,
-    )

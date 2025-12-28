@@ -40,7 +40,8 @@ from loguru import logger
 
 from taker.config import BroadcastPolicy, Schedule, TakerConfig
 from taker.orderbook import OrderbookManager, calculate_cj_fee
-from taker.podle import ExtendedPoDLECommitment, generate_podle_for_coinjoin
+from taker.podle import ExtendedPoDLECommitment
+from taker.podle_manager import PoDLEManager
 from taker.tx_builder import CoinJoinTxBuilder, build_coinjoin_tx
 
 
@@ -297,6 +298,9 @@ class Taker:
         # Orderbook manager
         self.orderbook_manager = OrderbookManager(config.max_cj_fee)
 
+        # PoDLE manager for commitment tracking
+        self.podle_manager = PoDLEManager(config.data_dir)
+
         # Current CoinJoin session data
         self.cj_amount = 0
         self.maker_sessions: dict[str, MakerSession] = {}
@@ -439,12 +443,13 @@ class Taker:
                     return None
                 return key.get_private_key_bytes()
 
-            self.podle_commitment = generate_podle_for_coinjoin(
+            self.podle_commitment = self.podle_manager.generate_fresh_commitment(
                 wallet_utxos=wallet_utxos,
                 cj_amount=self.cj_amount,
                 private_key_getter=get_private_key,
                 min_confirmations=self.config.taker_utxo_age,
                 min_percent=self.config.taker_utxo_amtpercent,
+                max_retries=self.config.taker_utxo_retries,
             )
 
             if not self.podle_commitment:
@@ -908,8 +913,20 @@ class Taker:
 
             # Select taker UTXOs
             required = self.cj_amount + total_maker_fee + tx_fee
+
+            # Ensure PoDLE UTXO is included
+            include_utxos = []
+            if self.podle_commitment:
+                podle_txid, podle_vout = self.podle_commitment.utxo.split(":")[:2]
+                podle_vout = int(podle_vout)
+                for u in taker_utxos:
+                    if u.txid == podle_txid and u.vout == podle_vout:
+                        include_utxos.append(u)
+                        logger.info(f"Including PoDLE UTXO: {podle_txid}:{podle_vout}")
+                        break
+
             selected_utxos = self.wallet.select_utxos(
-                mixdepth, required, self.config.taker_utxo_age
+                mixdepth, required, self.config.taker_utxo_age, include_utxos=include_utxos
             )
 
             if not selected_utxos:

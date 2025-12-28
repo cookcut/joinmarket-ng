@@ -19,7 +19,7 @@ from jmcore.encryption import CryptoSession
 from jmcore.models import Offer, OfferType
 from jmwallet.wallet.models import UTXOInfo
 
-from taker.podle import generate_podle_for_coinjoin
+from taker.podle_manager import PoDLEManager
 from taker.taker import MakerSession, Taker, TakerState
 
 
@@ -199,8 +199,8 @@ async def test_encryption_session_setup():
 
 
 @pytest.mark.asyncio
-async def test_podle_generation(mock_wallet):
-    """Test PoDLE commitment generation."""
+async def test_podle_generation(mock_wallet, tmp_path):
+    """Test PoDLE commitment generation using PoDLEManager."""
     # Create sample UTXOs
     utxos = [
         UTXOInfo(
@@ -230,8 +230,11 @@ async def test_podle_generation(mock_wallet):
         # Return a dummy private key
         return b"\x01" * 32
 
+    # Use PoDLEManager with temporary data directory
+    manager = PoDLEManager(data_dir=tmp_path)
+
     # Generate PoDLE commitment
-    commitment = generate_podle_for_coinjoin(
+    commitment = manager.generate_fresh_commitment(
         wallet_utxos=utxos,
         cj_amount=10_000_000,
         private_key_getter=get_private_key,
@@ -259,6 +262,124 @@ async def test_podle_generation(mock_wallet):
     assert "P2" in revelation
     assert "sig" in revelation
     assert "e" in revelation
+
+    # Verify commitment was tracked
+    assert len(manager.used_commitments) == 1
+    assert commitment.to_commitment_str()[1:] in manager.used_commitments  # Strip 'P' prefix
+
+
+@pytest.mark.asyncio
+async def test_podle_retry_limit(mock_wallet, tmp_path):
+    """Test that PoDLE respects max_retries limit."""
+    # Create a single UTXO
+    utxos = [
+        UTXOInfo(
+            txid="a" * 64,
+            vout=0,
+            value=25_000_000,
+            address="bcrt1qtest1",
+            confirmations=10,
+            scriptpubkey="001400" * 10,
+            path="m/84'/1'/0'/0/0",
+            mixdepth=0,
+        ),
+    ]
+
+    def get_private_key(addr: str) -> bytes | None:
+        return b"\x01" * 32
+
+    from taker.podle_manager import PoDLEManager
+
+    manager = PoDLEManager(data_dir=tmp_path)
+
+    # Generate 3 commitments with max_retries=3 (indices 0,1,2)
+    for i in range(3):
+        commitment = manager.generate_fresh_commitment(
+            wallet_utxos=utxos,
+            cj_amount=10_000_000,
+            private_key_getter=get_private_key,
+            min_confirmations=1,
+            min_percent=20,
+            max_retries=3,
+        )
+        assert commitment is not None
+        assert commitment.index == i
+
+    # 4th attempt should fail - UTXO exhausted
+    commitment = manager.generate_fresh_commitment(
+        wallet_utxos=utxos,
+        cj_amount=10_000_000,
+        private_key_getter=get_private_key,
+        min_confirmations=1,
+        min_percent=20,
+        max_retries=3,
+    )
+    assert commitment is None  # No fresh commitment available
+
+
+@pytest.mark.asyncio
+async def test_podle_utxo_deprioritization(mock_wallet, tmp_path):
+    """Test that UTXOs with fewer retries are preferred."""
+    # Create two UTXOs with identical confirmations and value
+    utxos = [
+        UTXOInfo(
+            txid="a" * 64,
+            vout=0,
+            value=25_000_000,
+            address="bcrt1qtest1",
+            confirmations=10,
+            scriptpubkey="001400" * 10,
+            path="m/84'/1'/0'/0/0",
+            mixdepth=0,
+        ),
+        UTXOInfo(
+            txid="b" * 64,
+            vout=1,
+            value=25_000_000,
+            address="bcrt1qtest2",
+            confirmations=10,
+            scriptpubkey="001400" * 10,
+            path="m/84'/1'/0'/0/1",
+            mixdepth=0,
+        ),
+    ]
+
+    # Use different private keys for different addresses
+    def get_private_key(addr: str) -> bytes | None:
+        if addr == "bcrt1qtest1":
+            return b"\x01" * 32
+        elif addr == "bcrt1qtest2":
+            return b"\x02" * 32
+        return None
+
+    from taker.podle_manager import PoDLEManager
+
+    manager = PoDLEManager(data_dir=tmp_path)
+
+    # Use UTXO_A twice (indices 0, 1)
+    for _ in range(2):
+        commitment = manager.generate_fresh_commitment(
+            wallet_utxos=[utxos[0]],  # Only UTXO_A
+            cj_amount=10_000_000,
+            private_key_getter=get_private_key,
+            min_confirmations=1,
+            min_percent=20,
+            max_retries=3,
+        )
+        assert commitment is not None
+
+    # Now with both UTXOs available, UTXO_B should be preferred (0 retries vs 2)
+    commitment = manager.generate_fresh_commitment(
+        wallet_utxos=utxos,  # Both UTXOs
+        cj_amount=10_000_000,
+        private_key_getter=get_private_key,
+        min_confirmations=1,
+        min_percent=20,
+        max_retries=3,
+    )
+    assert commitment is not None
+    # UTXO_B should be selected (txid starts with 'b')
+    assert commitment.utxo.startswith("bbbb")
 
 
 @pytest.mark.asyncio
