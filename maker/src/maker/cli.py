@@ -130,6 +130,18 @@ def start(
     password: Annotated[
         str | None, typer.Option("--password", "-p", help="Password for encrypted mnemonic file")
     ] = None,
+    data_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            "-d",
+            envvar="JOINMARKET_DATA_DIR",
+            help=(
+                "Data directory for JoinMarket files (commitment blacklist, history). "
+                "Defaults to ~/.joinmarket-ng or $JOINMARKET_DATA_DIR if set."
+            ),
+        ),
+    ] = None,
     network: Annotated[NetworkType, typer.Option(case_sensitive=False)] = NetworkType.MAINNET,
     bitcoin_network: Annotated[
         NetworkType | None,
@@ -262,6 +274,7 @@ def start(
         mnemonic=resolved_mnemonic,
         network=network,
         bitcoin_network=actual_bitcoin_network,
+        data_dir=data_dir,
         backend_type=backend_type,
         backend_config=backend_config,
         directory_servers=resolved_directory_servers,

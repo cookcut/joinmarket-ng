@@ -156,6 +156,8 @@ services:
       - MIN_SIZE=10000
       - TX_FEE_CONTRIBUTION=500
       - CJ_FEE_RELATIVE=0.001
+    volumes:
+      - maker-data:/home/jm/.joinmarket
     networks:
       - jm-network
     depends_on:
@@ -190,6 +192,8 @@ services:
       - MIN_MAKERS=2
       - MAX_CJ_FEE_REL=0.01
       - MAX_CJ_FEE_ABS=10000
+    volumes:
+      - taker-data:/home/jm/.joinmarket
     networks:
       - jm-network
     depends_on:
@@ -252,6 +256,8 @@ services:
       - CJ_FEE_RELATIVE=0.0003
       # Fidelity bond locktime: Jan 1, 2100 (Unix timestamp)
       - FIDELITY_BOND_LOCKTIMES=4102444800
+    volumes:
+      - maker1-data:/home/jm/.joinmarket
     networks:
       - jm-network
     depends_on:
@@ -287,6 +293,8 @@ services:
       - MIN_SIZE=10000
       - TX_FEE_CONTRIBUTION=500
       - CJ_FEE_RELATIVE=0.00025
+    volumes:
+      - maker2-data:/home/jm/.joinmarket
     networks:
       - jm-network
     depends_on:
@@ -666,6 +674,8 @@ services:
       - MIN_SIZE=10000
       - TX_FEE_CONTRIBUTION=500
       - CJ_FEE_RELATIVE=0.001
+    volumes:
+      - maker-neutrino-data:/home/jm/.joinmarket
     networks:
       - jm-network
     depends_on:
@@ -698,6 +708,8 @@ services:
       - MIN_MAKERS=2
       - MAX_CJ_FEE_REL=0.01
       - MAX_CJ_FEE_ABS=10000
+    volumes:
+      - taker-neutrino-data:/home/jm/.joinmarket
     networks:
       - jm-network
     depends_on:
@@ -719,6 +731,12 @@ volumes:
   jam-maker1-data:
   jam-maker2-data:
   tor-data:
+  maker-data:
+  maker1-data:
+  maker2-data:
+  maker-neutrino-data:
+  taker-data:
+  taker-neutrino-data:
 
 networks:
   jm-network:

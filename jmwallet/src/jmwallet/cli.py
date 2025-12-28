@@ -890,7 +890,11 @@ def history(
     stats: Annotated[bool, typer.Option("--stats", "-s", help="Show statistics only")] = False,
     csv_output: Annotated[bool, typer.Option("--csv", help="Output as CSV")] = False,
     data_dir: Annotated[
-        Path | None, typer.Option("--data-dir", help="Data directory (default: ~/.jm)")
+        Path | None,
+        typer.Option(
+            "--data-dir",
+            help="Data directory (default: ~/.joinmarket-ng or $JOINMARKET_DATA_DIR)",
+        ),
     ] = None,
 ) -> None:
     """View CoinJoin transaction history."""

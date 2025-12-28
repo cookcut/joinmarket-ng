@@ -36,6 +36,7 @@ from jmwallet.wallet.signing import (
     sign_p2wpkh_input,
 )
 from loguru import logger
+from maker.commitment_blacklist import set_blacklist_path
 
 from taker.config import BroadcastPolicy, Schedule, TakerConfig
 from taker.orderbook import OrderbookManager, calculate_cj_fee
@@ -317,6 +318,9 @@ class Taker:
     async def start(self) -> None:
         """Start the taker and connect to directory servers."""
         logger.info(f"Starting taker (nick: {self.nick})")
+
+        # Initialize commitment blacklist with configured data directory
+        set_blacklist_path(data_dir=self.config.data_dir)
 
         # Sync wallet
         logger.info("Syncing wallet...")

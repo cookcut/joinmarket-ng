@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
+from jmcore.paths import get_default_data_dir
 from loguru import logger
 
 
@@ -62,9 +63,17 @@ class TransactionHistoryEntry:
 
 
 def _get_history_path(data_dir: Path | None = None) -> Path:
-    """Get the path to the history CSV file."""
+    """
+    Get the path to the history CSV file.
+
+    Args:
+        data_dir: Optional data directory (defaults to get_default_data_dir())
+
+    Returns:
+        Path to coinjoin_history.csv in the data directory
+    """
     if data_dir is None:
-        data_dir = Path.home() / ".jm"
+        data_dir = get_default_data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir / "coinjoin_history.csv"
 
@@ -83,7 +92,7 @@ def append_history_entry(
 
     Args:
         entry: The transaction history entry to append
-        data_dir: Optional data directory (defaults to ~/.jm)
+        data_dir: Optional data directory (defaults to get_default_data_dir())
     """
     history_path = _get_history_path(data_dir)
     fieldnames = _get_fieldnames()
@@ -115,7 +124,7 @@ def read_history(
     Read transaction history from the CSV file.
 
     Args:
-        data_dir: Optional data directory (defaults to ~/.jm)
+        data_dir: Optional data directory (defaults to get_default_data_dir())
         limit: Maximum number of entries to return (most recent first)
         role_filter: Filter by role (maker/taker)
 

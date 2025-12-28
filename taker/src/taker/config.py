@@ -5,6 +5,7 @@ Configuration for JoinMarket Taker.
 from __future__ import annotations
 
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from jmcore.constants import DUST_THRESHOLD
@@ -46,6 +47,12 @@ class TakerConfig(BaseModel):
     # Bitcoin network - used for address generation (bcrt1 vs tb1 vs bc1)
     # If not specified, defaults to the same as network
     bitcoin_network: NetworkType | None = None
+
+    # Data directory for JoinMarket files (commitment blacklist, history, etc.)
+    # Defaults to ~/.joinmarket-ng or $JOINMARKET_DATA_DIR if set
+    # For Docker compatibility with reference JM, set to /home/jm/.joinmarket
+    data_dir: Path | None = None
+
     backend_type: str = "full_node"  # full_node or neutrino
     backend_config: dict[str, Any] = Field(default_factory=dict)
 

@@ -61,6 +61,53 @@ The implementation separates concerns into distinct packages:
 
 ---
 
+## Data Directory
+
+### Overview
+
+JoinMarket NG uses a dedicated data directory for persistent files that need to be shared across sessions and potentially between maker/taker instances on the same machine.
+
+### Directory Structure
+
+```
+~/.joinmarket-ng/          (or $JOINMARKET_DATA_DIR)
+├── cmtdata/
+│   └── commitmentlist     PoDLE commitment blacklist (shared network-wide)
+└── coinjoin_history.csv   CoinJoin transaction history log
+```
+
+### Configuration
+
+**Direct Python usage:**
+- Default: `~/.joinmarket-ng`
+- Override with `--data-dir` CLI flag or `$JOINMARKET_DATA_DIR` environment variable
+
+**Docker usage:**
+- Default: `/home/jm/.joinmarket` (mounted as volume)
+- Volumes persist across container restarts
+- Makers and takers can share volumes for commitment blacklist
+
+**Reference JoinMarket compatibility:**
+- To share data with JAM in Docker: `export JOINMARKET_DATA_DIR=/root/.joinmarket`
+- The `cmtdata/` subdirectory structure matches JAM's configuration
+
+### Shared Files
+
+**Commitment Blacklist** (`cmtdata/commitmentlist`):
+- Shared between all makers and takers on the same machine
+- Prevents PoDLE commitment reuse across instances
+- Synchronized via `!hp2` protocol messages network-wide
+- ASCII format: one commitment per line (hex string)
+
+**CoinJoin History** (`coinjoin_history.csv`):
+- Records all completed CoinJoin transactions
+- Shared between maker and taker instances
+- Tracks fees, roles, peer counts, and transaction details
+- CSV format for easy analysis with external tools
+- View with: `jm-wallet history --stats` or `jm-wallet history --limit 10`
+
+---
+
 ## Dependency Management
 
 ### Overview
@@ -1051,6 +1098,37 @@ Broadcasting through a random maker provides privacy because:
 
 **Trade-off**: Using `not-self` requires trusting makers to broadcast. If all selected makers fail or refuse, the taker must manually broadcast, potentially compromising privacy.
 
+#### Broadcast Failure Scenarios
+
+In multi-party CoinJoins, broadcast failures can occur for several reasons:
+
+| Scenario | Cause | Outcome |
+|----------|-------|---------|
+| **Input Already Spent** | Another maker spent their UTXO before broadcast | Transaction invalid; must restart CoinJoin |
+| **Network Issues** | Maker's node disconnected or slow | May succeed if taker has fallback |
+| **Fee Too Low** | Transaction conflicts with higher-fee replacement | RBF rejection; transaction won't confirm |
+| **Mempool Full** | Node rejects low-fee transactions | May need to retry with higher fee |
+
+**Input Already Spent (Race Condition)**:
+
+This is a legitimate failure mode in collaborative transactions. When multiple makers participate in CoinJoins simultaneously, one maker's UTXO might be spent in a different transaction before the current CoinJoin is broadcast. This results in an error like:
+
+```
+RPC error -26: insufficient fee, rejecting replacement <txid>
+```
+
+This is **not a bug** - it's an expected race condition in decentralized systems. The taker should:
+1. Log the failure
+2. Select different makers
+3. Retry the CoinJoin
+
+**Maker Behavior on Broadcast Failure**:
+
+Makers broadcast transactions "unquestioningly" when they receive `!push`. If broadcast fails:
+- The maker logs the error but does not retry
+- The taker may have configured a fallback (see Fallback Mechanism above)
+- No funds are at risk since the transaction was never confirmed
+
 ### Implementation Reference
 
 The protocol flow is implemented in:
@@ -1330,6 +1408,62 @@ def generate_podle(private_key_bytes, utxo_str, index=0) -> PoDLECommitment:
 def verify_podle(p, p2, sig, e, commitment, index_range) -> tuple[bool, str]:
     """Verify PoDLE proof."""
 ```
+
+### Commitment Blacklisting and hp2 Protocol
+
+Once a PoDLE commitment has been used (whether the CoinJoin succeeds or fails), it should be blacklisted to prevent reuse. The `!hp2` command broadcasts commitments across the maker network for collective blacklisting.
+
+#### Message Format
+
+```
+!hp2 <commitment_hex>
+```
+
+Where `commitment_hex` is the SHA256 hash of the P2 point (64 hex characters).
+
+#### Broadcast Flow
+
+1. **After !auth verification**: When a maker successfully verifies a taker's PoDLE proof, it broadcasts the commitment via `!hp2` as a **public message** (PUBMSG)
+
+2. **On receiving !hp2 via PUBMSG**: Makers add the commitment to their local blacklist and reject any future `!fill` requests using that commitment
+
+3. **On receiving !hp2 via PRIVMSG**: Another maker is asking us to broadcast the commitment on their behalf (for source obfuscation). We re-broadcast it publicly without verification.
+
+#### Source Obfuscation
+
+To prevent observers from identifying which maker first saw a commitment, makers can send `!hp2` via PRIVMSG to a random peer, asking them to broadcast it publicly. This provides plausible deniability about which maker processed the original CoinJoin.
+
+```
+Maker A (processes CoinJoin) → PRIVMSG !hp2 → Maker B (random)
+                                              ↓
+                                        PUBMSG !hp2 → All makers
+```
+
+#### Why Blacklist Commitments?
+
+- **Anti-Sybil**: Prevents attackers from reusing the same UTXO proof to harvest maker UTXOs
+- **Failed CoinJoin Protection**: Even if a CoinJoin fails, the commitment is burned
+- **Network Coordination**: Distributed blacklist across all makers
+
+#### Implementation Details
+
+The blacklist is persisted to a `commitmentlist` file (one commitment per line, ASCII format). The location is:
+
+- **Direct Python**: `~/.joinmarket-ng/cmtdata/commitmentlist` (or `$JOINMARKET_DATA_DIR/cmtdata/commitmentlist`)
+- **Docker**: `/home/jm/.joinmarket/cmtdata/commitmentlist` (mounted as volume)
+
+This matches the reference implementation's subdirectory structure (`cmtdata/`) for compatibility.
+
+The blacklist implementation is:
+
+- **Thread-safe**: Uses file locking for concurrent access
+- **Case-insensitive**: Commitments are normalized to lowercase
+- **Atomic**: Check-and-add operations prevent race conditions
+- **Shared**: Makers and takers on the same machine share the same blacklist file
+
+Commitments are added to the blacklist:
+1. When received via `!hp2` public broadcast
+2. When broadcasting our own commitment after successful `!auth`
 
 ---
 

@@ -42,6 +42,13 @@ RUN useradd -m -u 1000 jm && \
 
 USER jm
 
+# Create data directory for JoinMarket files
+# This includes commitment blacklist, history, and other persistent data
+RUN mkdir -p /home/jm/.joinmarket && chmod 700 /home/jm/.joinmarket
+
+# Declare volume for persistent data
+VOLUME /home/jm/.joinmarket
+
 # Environment variables
 ENV NETWORK=mainnet
 # Bitcoin network for address generation (bcrt1 vs tb1 vs bc1)
@@ -89,6 +96,10 @@ ENV FIDELITY_BOND_LOCKTIMES=
 # Enable sensitive logging (descriptors, addresses) for debugging
 # WARNING: Do not enable in production - exposes wallet information
 ENV SENSITIVE_LOGGING=
+
+# Data directory for JoinMarket files (commitment blacklist, history)
+# Set to /home/jm/.joinmarket to use the volume mount
+ENV JOINMARKET_DATA_DIR=/home/jm/.joinmarket
 
 # Use shell to conditionally add optional arguments
 CMD ["sh", "-c", "\

@@ -30,6 +30,7 @@ from jmwallet.wallet.service import WalletService
 from loguru import logger
 
 from maker.coinjoin import CoinJoinSession
+from maker.commitment_blacklist import add_commitment, check_commitment, set_blacklist_path
 from maker.config import MakerConfig
 from maker.fidelity import (
     FidelityBondInfo,
@@ -164,14 +165,18 @@ class MakerBot:
         Start the maker bot.
 
         Flow:
-        1. Sync wallet with blockchain
-        2. Create ephemeral hidden service if tor_control enabled
-        3. Connect to directory servers
-        4. Create and announce offers
-        5. Listen for taker requests
+        1. Initialize commitment blacklist
+        2. Sync wallet with blockchain
+        3. Create ephemeral hidden service if tor_control enabled
+        4. Connect to directory servers
+        5. Create and announce offers
+        6. Listen for taker requests
         """
         try:
             logger.info(f"Starting maker bot (nick: {self.nick})")
+
+            # Initialize commitment blacklist with configured data directory
+            set_blacklist_path(data_dir=self.config.data_dir)
 
             logger.info("Syncing wallet...")
             await self.wallet.sync_all()
@@ -389,6 +394,26 @@ class MakerBot:
             )
             del self.active_sessions[nick]
 
+    async def _deferred_wallet_resync(self) -> None:
+        """Re-sync wallet after CoinJoin completion in background.
+
+        This is deferred to a background task to avoid blocking message processing.
+        The transaction might not be broadcast yet (!push comes after !tx), so we
+        add a small delay to give the transaction time to propagate.
+        """
+        try:
+            # Wait a bit before rescanning to:
+            # 1. Allow !push message to be processed
+            # 2. Give transaction time to propagate in mempool
+            await asyncio.sleep(5.0)
+
+            logger.info("Re-syncing wallet after CoinJoin completion...")
+            await self.wallet.sync_all()
+            total_balance = await self.wallet.get_total_balance()
+            logger.info(f"Wallet re-synced. New balance: {total_balance:,} sats")
+        except Exception as e:
+            logger.error(f"Failed to re-sync wallet after CoinJoin: {e}")
+
     async def _announce_offers(self) -> None:
         """Announce offers to all connected directory servers"""
         for offer in self.current_offers:
@@ -515,12 +540,16 @@ class MakerBot:
             if from_nick == self.nick:
                 return
 
+            # Strip leading "!" and get command
+            command = rest.strip().lstrip("!")
+
             # Respond to orderbook requests by re-announcing offers
-            # Note: rest may include leading "!" when message has !!orderbook format
-            # (split on "!" gives empty string before "orderbook" which rejoins as "!orderbook")
-            if to_nick == "PUBLIC" and rest.strip().lstrip("!") == "orderbook":
+            if to_nick == "PUBLIC" and command == "orderbook":
                 logger.info(f"Received !orderbook request from {from_nick}, re-announcing offers")
                 await self._announce_offers()
+            elif to_nick == "PUBLIC" and command.startswith("hp2"):
+                # hp2 via pubmsg = commitment broadcast for blacklisting
+                await self._handle_hp2_pubmsg(from_nick, command)
 
         except Exception as e:
             logger.error(f"Failed to handle pubmsg: {e}")
@@ -551,6 +580,10 @@ class MakerBot:
                 await self._handle_tx(from_nick, command)
             elif command.startswith("push"):
                 await self._handle_push(from_nick, command)
+            elif command.startswith("hp2"):
+                # hp2 via privmsg = commitment transfer request
+                # We should re-broadcast it publicly to obfuscate the source
+                await self._handle_hp2_privmsg(from_nick, command)
             else:
                 logger.debug(f"Unknown command: {command[:20]}...")
 
@@ -576,6 +609,14 @@ class MakerBot:
             # Strip commitment prefix if present (e.g., "P" for standard PoDLE)
             if commitment.startswith("P"):
                 commitment = commitment[1:]
+
+            # Check if commitment is already blacklisted
+            if not check_commitment(commitment):
+                logger.warning(
+                    f"Rejecting !fill from {taker_nick}: commitment already used "
+                    f"({commitment[:16]}...)"
+                )
+                return
 
             if offer_id >= len(self.current_offers):
                 logger.warning(f"Invalid offer ID: {offer_id}")
@@ -693,6 +734,10 @@ class MakerBot:
 
             if success:
                 await self._send_response(taker_nick, "ioauth", response)
+
+                # Broadcast the commitment via hp2 so other makers can blacklist it
+                # This prevents reuse of commitments in future CoinJoin attempts
+                await self._broadcast_commitment(commitment)
             else:
                 logger.error(f"Auth failed: {response.get('error')}")
                 del self.active_sessions[taker_nick]
@@ -772,7 +817,7 @@ class MakerBot:
                         txid=response.get("txid"),
                         network=self.config.network.value,
                     )
-                    append_history_entry(history_entry)
+                    append_history_entry(history_entry, data_dir=self.config.data_dir)
                     net = fee_received - txfee_contribution
                     logger.debug(f"Recorded CoinJoin in history: net fee {net} sats")
                 except Exception as e:
@@ -780,14 +825,9 @@ class MakerBot:
 
                 del self.active_sessions[taker_nick]
 
-                # Re-sync wallet to update UTXO set after CoinJoin
-                logger.info("Re-syncing wallet after CoinJoin completion...")
-                try:
-                    await self.wallet.sync_all()
-                    total_balance = await self.wallet.get_total_balance()
-                    logger.info(f"Wallet re-synced. New balance: {total_balance:,} sats")
-                except Exception as e:
-                    logger.error(f"Failed to re-sync wallet after CoinJoin: {e}")
+                # Schedule wallet re-sync in background to avoid blocking !push handling
+                # The transaction hasn't been broadcast yet, so we should not block here
+                asyncio.create_task(self._deferred_wallet_resync())
             else:
                 logger.error(f"TX verification failed: {response.get('error')}")
                 del self.active_sessions[taker_nick]
@@ -845,6 +885,97 @@ class MakerBot:
 
         except Exception as e:
             logger.error(f"Failed to handle !push: {e}")
+
+    async def _handle_hp2_pubmsg(self, from_nick: str, msg: str) -> None:
+        """Handle !hp2 commitment broadcast seen in public channel.
+
+        When a maker sees a PoDLE commitment broadcast in public (via !hp2),
+        they should blacklist it. This prevents reuse of commitments that
+        may have been used in failed or malicious CoinJoin attempts.
+
+        Format: hp2 <commitment_hex>
+        """
+        try:
+            parts = msg.split()
+            if len(parts) < 2:
+                logger.debug(f"Invalid !hp2 format from {from_nick}: missing commitment")
+                return
+
+            commitment = parts[1]
+
+            # Add to blacklist (persists to disk)
+            if add_commitment(commitment):
+                logger.info(
+                    f"Received commitment broadcast from {from_nick}, "
+                    f"added to blacklist: {commitment[:16]}..."
+                )
+            else:
+                logger.debug(
+                    f"Received commitment broadcast from {from_nick}, "
+                    f"already blacklisted: {commitment[:16]}..."
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to handle !hp2 pubmsg: {e}")
+
+    async def _handle_hp2_privmsg(self, from_nick: str, msg: str) -> None:
+        """Handle !hp2 commitment transfer via private message.
+
+        When a maker receives !hp2 via privmsg, another maker is asking us to
+        broadcast the commitment publicly. This provides obfuscation of the
+        original source of the commitment broadcast.
+
+        We simply re-broadcast it via pubmsg without verifying the commitment.
+
+        Format: hp2 <commitment_hex>
+        """
+        try:
+            parts = msg.split()
+            if len(parts) < 2:
+                logger.debug(f"Invalid !hp2 format from {from_nick}: missing commitment")
+                return
+
+            commitment = parts[1]
+            logger.info(f"Received commitment transfer from {from_nick}, re-broadcasting...")
+
+            # Broadcast the commitment publicly
+            hp2_msg = f"hp2 {commitment}"
+            for client in self.directory_clients.values():
+                try:
+                    await client.send_public_message(hp2_msg)
+                except Exception as e:
+                    logger.warning(f"Failed to broadcast hp2: {e}")
+
+            logger.debug(f"Re-broadcast commitment: {commitment[:16]}...")
+
+        except Exception as e:
+            logger.error(f"Failed to handle !hp2 privmsg: {e}")
+
+    async def _broadcast_commitment(self, commitment: str) -> None:
+        """Broadcast a PoDLE commitment via !hp2 to help other makers blacklist it.
+
+        After successfully processing a taker's !auth message, we broadcast the
+        commitment so other makers can add it to their blacklist. This prevents
+        the same commitment from being reused in future CoinJoin attempts.
+
+        The reference implementation does this to maintain network-wide commitment
+        blacklisting, which is a key anti-Sybil mechanism.
+        """
+        try:
+            # Add to our own blacklist first (persists to disk)
+            add_commitment(commitment)
+
+            hp2_msg = f"hp2 {commitment}"
+            for client in self.directory_clients.values():
+                try:
+                    await client.send_public_message(hp2_msg)
+                except Exception as e:
+                    logger.warning(f"Failed to broadcast commitment: {e}")
+
+            logger.debug(f"Broadcast commitment: {commitment[:16]}...")
+
+        except Exception as e:
+            logger.error(f"Failed to broadcast commitment: {e}")
 
     async def _send_response(self, taker_nick: str, command: str, data: dict[str, Any]) -> None:
         """Send signed response to taker.

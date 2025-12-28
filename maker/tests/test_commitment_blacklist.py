@@ -1,0 +1,193 @@
+"""
+Tests for the commitment blacklist module.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from maker.commitment_blacklist import CommitmentBlacklist
+
+
+class TestCommitmentBlacklist:
+    """Tests for CommitmentBlacklist class."""
+
+    def test_empty_blacklist(self, tmp_path: Path) -> None:
+        """Test that a new blacklist is empty."""
+        blacklist = CommitmentBlacklist(tmp_path / "commitmentlist")
+        assert len(blacklist) == 0
+
+    def test_add_commitment(self, tmp_path: Path) -> None:
+        """Test adding a commitment to the blacklist."""
+        blacklist = CommitmentBlacklist(tmp_path / "commitmentlist")
+
+        commitment = "a" * 64
+        result = blacklist.add(commitment)
+
+        assert result is True
+        assert len(blacklist) == 1
+        assert commitment in blacklist
+
+    def test_add_duplicate_commitment(self, tmp_path: Path) -> None:
+        """Test that adding a duplicate commitment returns False."""
+        blacklist = CommitmentBlacklist(tmp_path / "commitmentlist")
+
+        commitment = "b" * 64
+        result1 = blacklist.add(commitment)
+        result2 = blacklist.add(commitment)
+
+        assert result1 is True
+        assert result2 is False
+        assert len(blacklist) == 1
+
+    def test_is_blacklisted(self, tmp_path: Path) -> None:
+        """Test checking if a commitment is blacklisted."""
+        blacklist = CommitmentBlacklist(tmp_path / "commitmentlist")
+
+        commitment = "c" * 64
+        assert blacklist.is_blacklisted(commitment) is False
+
+        blacklist.add(commitment)
+        assert blacklist.is_blacklisted(commitment) is True
+
+    def test_check_and_add(self, tmp_path: Path) -> None:
+        """Test the atomic check_and_add operation."""
+        blacklist = CommitmentBlacklist(tmp_path / "commitmentlist")
+
+        commitment = "d" * 64
+
+        # First call should return True (allowed, then added)
+        result1 = blacklist.check_and_add(commitment)
+        assert result1 is True
+        assert commitment in blacklist
+
+        # Second call should return False (already blacklisted)
+        result2 = blacklist.check_and_add(commitment)
+        assert result2 is False
+
+    def test_persistence(self, tmp_path: Path) -> None:
+        """Test that commitments are persisted to disk."""
+        blacklist_path = tmp_path / "commitmentlist"
+
+        # Add commitments and save
+        blacklist1 = CommitmentBlacklist(blacklist_path)
+        blacklist1.add("e" * 64)
+        blacklist1.add("f" * 64)
+
+        # Create new instance to load from disk
+        blacklist2 = CommitmentBlacklist(blacklist_path)
+
+        assert len(blacklist2) == 2
+        assert "e" * 64 in blacklist2
+        assert "f" * 64 in blacklist2
+
+    def test_case_insensitivity(self, tmp_path: Path) -> None:
+        """Test that commitments are case-insensitive."""
+        blacklist = CommitmentBlacklist(tmp_path / "commitmentlist")
+
+        commitment_lower = "abcdef1234567890" + "0" * 48
+        commitment_upper = "ABCDEF1234567890" + "0" * 48
+
+        blacklist.add(commitment_lower)
+
+        # Should find it regardless of case
+        assert blacklist.is_blacklisted(commitment_upper) is True
+        assert blacklist.is_blacklisted(commitment_lower) is True
+
+    def test_whitespace_handling(self, tmp_path: Path) -> None:
+        """Test that whitespace is stripped from commitments."""
+        blacklist = CommitmentBlacklist(tmp_path / "commitmentlist")
+
+        commitment = "g" * 64
+        commitment_with_space = f"  {commitment}  "
+
+        blacklist.add(commitment_with_space)
+
+        assert commitment in blacklist
+        assert blacklist.is_blacklisted(commitment) is True
+
+    def test_empty_commitment_rejected(self, tmp_path: Path) -> None:
+        """Test that empty commitments are rejected."""
+        blacklist = CommitmentBlacklist(tmp_path / "commitmentlist")
+
+        result = blacklist.add("")
+        assert result is False
+        assert len(blacklist) == 0
+
+        result = blacklist.add("   ")
+        assert result is False
+        assert len(blacklist) == 0
+
+    def test_multiple_commitments(self, tmp_path: Path) -> None:
+        """Test adding multiple commitments."""
+        blacklist = CommitmentBlacklist(tmp_path / "commitmentlist")
+
+        commitments = [f"{i:064x}" for i in range(10)]
+
+        for c in commitments:
+            blacklist.add(c)
+
+        assert len(blacklist) == 10
+
+        for c in commitments:
+            assert c in blacklist
+
+    def test_file_created_on_first_add(self, tmp_path: Path) -> None:
+        """Test that the blacklist file is created on first add."""
+        blacklist_path = tmp_path / "subdir" / "commitmentlist"
+
+        # File and directory shouldn't exist yet
+        assert not blacklist_path.exists()
+        assert not blacklist_path.parent.exists()
+
+        blacklist = CommitmentBlacklist(blacklist_path)
+        blacklist.add("h" * 64)
+
+        # Now the file should exist
+        assert blacklist_path.exists()
+
+    def test_load_corrupted_file(self, tmp_path: Path) -> None:
+        """Test that corrupted files are handled gracefully."""
+        blacklist_path = tmp_path / "commitmentlist"
+
+        # Create a file with some valid and some empty lines
+        blacklist_path.write_text("valid_commitment\n\n  \nanother_valid\n")
+
+        blacklist = CommitmentBlacklist(blacklist_path)
+
+        # Should load valid commitments only
+        assert "valid_commitment" in blacklist
+        assert "another_valid" in blacklist
+
+
+class TestGlobalBlacklist:
+    """Tests for global blacklist functions."""
+
+    def test_global_functions(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test the convenience global functions."""
+        from maker import commitment_blacklist
+
+        # Reset global state
+        monkeypatch.setattr(commitment_blacklist, "_global_blacklist", None)
+
+        # Set custom path
+        commitment_blacklist.set_blacklist_path(tmp_path / "commitmentlist")
+
+        commitment = "i" * 64
+
+        # Initially allowed
+        assert commitment_blacklist.check_commitment(commitment) is True
+
+        # Add it
+        result = commitment_blacklist.add_commitment(commitment)
+        assert result is True
+
+        # Now blacklisted
+        assert commitment_blacklist.check_commitment(commitment) is False
+
+        # Try check_and_add on a new commitment
+        new_commitment = "j" * 64
+        assert commitment_blacklist.check_and_add_commitment(new_commitment) is True
+        assert commitment_blacklist.check_and_add_commitment(new_commitment) is False

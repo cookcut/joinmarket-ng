@@ -22,6 +22,7 @@ from jmcore.models import (
     PeerInfo,
     get_default_directory_nodes,
 )
+from jmcore.paths import get_commitment_blacklist_path, get_default_data_dir
 from jmcore.podle import (
     PoDLECommitment,
     PoDLEError,
@@ -87,6 +88,8 @@ __all__ = [
     "deserialize_revelation",
     "format_utxo_list",
     "generate_podle",
+    "get_commitment_blacklist_path",
+    "get_default_data_dir",
     "get_default_directory_nodes",
     "get_nick_version",
     "parse_podle_revelation",
