@@ -262,7 +262,7 @@ def generate(
 
         if save:
             if output_file is None:
-                output_file = Path.home() / ".jm" / "wallets" / "default.mnemonic"
+                output_file = Path.home() / ".joinmarket-ng" / "wallets" / "default.mnemonic"
 
             # Prompt for password if requested
             if prompt_password:

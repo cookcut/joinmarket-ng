@@ -15,8 +15,8 @@ pip install -e ../jmcore ../jmwallet .
 Generate an encrypted wallet file:
 
 ```bash
-mkdir -p ~/.jm/wallets
-jm-wallet generate --save --prompt-password --output ~/.jm/wallets/maker.mnemonic
+mkdir -p ~/.joinmarket-ng/wallets
+jm-wallet generate --save --prompt-password --output ~/.joinmarket-ng/wallets/maker.mnemonic
 ```
 
 **IMPORTANT**: Write down the displayed mnemonic - it's your only backup!
@@ -27,10 +27,10 @@ See [jmwallet README](../jmwallet/README.md) for wallet management details.
 
 ```bash
 # View balance and addresses
-jm-wallet info --mnemonic-file ~/.jm/wallets/maker.mnemonic --backend neutrino
+jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic --backend neutrino
 
 # Or use jm-maker to get a specific address
-jm-maker generate-address --mnemonic-file ~/.jm/wallets/maker.mnemonic
+jm-maker generate-address --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
 ```
 
 ### 3. Fund Your Wallet
@@ -61,7 +61,7 @@ Start maker bot:
 
 ```bash
 jm-maker start \
-  --mnemonic-file ~/.jm/wallets/maker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
   --backend-type neutrino
 ```
 
@@ -70,20 +70,20 @@ jm-maker start \
 For maximum security. Create an environment file to avoid credentials in shell history:
 
 ```bash
-cat > ~/.jm/bitcoin.env << EOF
+cat > ~/.joinmarket-ng/bitcoin.env << EOF
 export BITCOIN_RPC_URL=http://127.0.0.1:8332
 export BITCOIN_RPC_USER=your_rpc_user
 export BITCOIN_RPC_PASSWORD=your_rpc_password
 EOF
-chmod 600 ~/.jm/bitcoin.env
+chmod 600 ~/.joinmarket-ng/bitcoin.env
 ```
 
 Start maker bot:
 
 ```bash
-source ~/.jm/bitcoin.env
+source ~/.joinmarket-ng/bitcoin.env
 jm-maker start \
-  --mnemonic-file ~/.jm/wallets/maker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
   --backend-type full_node
 ```
 
@@ -131,14 +131,14 @@ Charge a fixed satoshi amount regardless of CoinJoin size:
 ```bash
 # Relative fee (0.2%) - auto-selects sw0reloffer
 jm-maker start \
-  --mnemonic-file ~/.jm/wallets/maker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
   --backend-type neutrino \
   --cj-fee-relative 0.002 \
   --min-size 200000
 
 # Absolute fee (1000 sats) - auto-selects sw0absoffer
 jm-maker start \
-  --mnemonic-file ~/.jm/wallets/maker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
   --backend-type neutrino \
   --cj-fee-absolute 1000 \
   --min-size 200000
@@ -151,18 +151,18 @@ Increase offer visibility by locking bitcoin for a period. See wallet CLI:
 ```bash
 # Generate bond address
 jm-wallet generate-bond-address \
-  --mnemonic-file ~/.jm/wallets/maker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
   --locktime 1735689600
 
 # List existing bonds
-jm-wallet list-bonds --mnemonic-file ~/.jm/wallets/maker.mnemonic
+jm-wallet list-bonds --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic
 ```
 
 Specify bond locktimes when starting:
 
 ```bash
 jm-maker start \
-  --mnemonic-file ~/.jm/wallets/maker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic \
   --fidelity-bond-locktimes 1735689600
 ```
 
@@ -208,7 +208,7 @@ services:
       context: ..
       dockerfile: maker/Dockerfile
     environment:
-      MNEMONIC_FILE: /wallets/maker.mnemonic
+      MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/maker.mnemonic
       BACKEND_TYPE: neutrino
       NEUTRINO_URL: http://neutrino:8334
       TOR_SOCKS_HOST: tor
@@ -220,7 +220,7 @@ services:
       ONION_SERVING_HOST: 0.0.0.0
       ONION_SERVING_PORT: 27183
     volumes:
-      - ~/.jm/wallets:/wallets:ro
+      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
       - tor-data:/var/lib/tor:ro  # Read-only access to cookie
     depends_on:
       - neutrino
@@ -254,11 +254,11 @@ services:
       context: ..
       dockerfile: maker/Dockerfile
     environment:
-      MNEMONIC_FILE: /wallets/maker.mnemonic
+      MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/maker.mnemonic
       BACKEND_TYPE: neutrino
       NEUTRINO_URL: http://neutrino:8334
     volumes:
-      - ~/.jm/wallets:/wallets:ro
+      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
     depends_on:
       - neutrino
       - tor
@@ -313,7 +313,7 @@ services:
       context: ..
       dockerfile: maker/Dockerfile
     environment:
-      MNEMONIC_FILE: /wallets/maker.mnemonic
+      MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/maker.mnemonic
       BACKEND_TYPE: full_node
       BITCOIN_RPC_URL: http://bitcoind:8332
       BITCOIN_RPC_USER: rpcuser
@@ -327,7 +327,7 @@ services:
       ONION_SERVING_HOST: 0.0.0.0
       ONION_SERVING_PORT: 27183
     volumes:
-      - ~/.jm/wallets:/wallets:ro
+      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
       - tor-data:/var/lib/tor:ro
     depends_on:
       - bitcoind
@@ -409,7 +409,7 @@ Use env vars for RPC credentials (see jmwallet README).
 ## Troubleshooting
 
 **"No offers created"**
-- Check balance: `jm-wallet info --mnemonic-file ~/.jm/wallets/maker.mnemonic`
+- Check balance: `jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/maker.mnemonic`
 - Need at least 100,000 sats per mixdepth by default
 
 **"Failed to connect to directory server"**

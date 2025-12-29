@@ -360,10 +360,10 @@ If you want the same onion address across restarts (e.g., for debugging):
 
 ```bash
 # Generate keys once
-python scripts/generate_tor_keys.py ~/.jm-tor-keys
+python scripts/generate_tor_keys.py ~/.joinmarket-ng-tor-keys
 
 # Export the secret key before starting Docker
-export TOR_HS_ED25519_SECRET_KEY_BASE64=$(base64 -w0 ~/.jm-tor-keys/hs_ed25519_secret_key)
+export TOR_HS_ED25519_SECRET_KEY_BASE64=$(base64 -w0 ~/.joinmarket-ng-tor-keys/hs_ed25519_secret_key)
 
 # Start services (will use your key)
 docker compose --profile reference up -d

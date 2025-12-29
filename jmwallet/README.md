@@ -16,8 +16,8 @@ pip install -e .
 Create an encrypted wallet file with password protection:
 
 ```bash
-mkdir -p ~/.jm/wallets
-jm-wallet generate --save --prompt-password --output ~/.jm/wallets/wallet.mnemonic
+mkdir -p ~/.joinmarket-ng/wallets
+jm-wallet generate --save --prompt-password --output ~/.joinmarket-ng/wallets/wallet.mnemonic
 ```
 
 **IMPORTANT**: The mnemonic is displayed once during generation. Write it down and store it securely offline - it's your only backup if you lose the encrypted file!
@@ -46,7 +46,7 @@ Check wallet balance:
 
 ```bash
 jm-wallet info \
-  --mnemonic-file ~/.jm/wallets/wallet.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic \
   --backend neutrino
 ```
 
@@ -57,20 +57,20 @@ For maximum security and privacy. Requires a synced Bitcoin Core node (v23+).
 Create an environment file to avoid exposing credentials in shell history:
 
 ```bash
-cat > ~/.jm/bitcoin.env << EOF
+cat > ~/.joinmarket-ng/bitcoin.env << EOF
 export BITCOIN_RPC_URL=http://127.0.0.1:8332
 export BITCOIN_RPC_USER=your_rpc_user
 export BITCOIN_RPC_PASSWORD=your_rpc_password
 EOF
-chmod 600 ~/.jm/bitcoin.env
+chmod 600 ~/.joinmarket-ng/bitcoin.env
 ```
 
 Load environment and check balance:
 
 ```bash
-source ~/.jm/bitcoin.env
+source ~/.joinmarket-ng/bitcoin.env
 jm-wallet info \
-  --mnemonic-file ~/.jm/wallets/wallet.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic \
   --backend full_node
 ```
 
@@ -97,13 +97,13 @@ Balance by mixdepth:
 
 ```bash
 # Generate and save encrypted wallet (RECOMMENDED)
-jm-wallet generate --save --prompt-password --output ~/.jm/wallets/wallet.mnemonic
+jm-wallet generate --save --prompt-password --output ~/.joinmarket-ng/wallets/wallet.mnemonic
 
 # Just generate (display only, not saved)
 jm-wallet generate
 
 # 12-word mnemonic instead of 24
-jm-wallet generate --words 12 --save --prompt-password --output ~/.jm/wallets/wallet.mnemonic
+jm-wallet generate --words 12 --save --prompt-password --output ~/.joinmarket-ng/wallets/wallet.mnemonic
 ```
 
 **Note**: `--prompt-password` only works with `--save`. The wallet file is encrypted and requires the password to use.
@@ -112,17 +112,17 @@ jm-wallet generate --words 12 --save --prompt-password --output ~/.jm/wallets/wa
 
 ```bash
 # Neutrino backend (default ports)
-jm-wallet info --mnemonic-file ~/.jm/wallets/wallet.mnemonic --backend neutrino
+jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic --backend neutrino
 
 # Bitcoin Core (with environment file)
-source ~/.jm/bitcoin.env
-jm-wallet info --mnemonic-file ~/.jm/wallets/wallet.mnemonic --backend full_node
+source ~/.joinmarket-ng/bitcoin.env
+jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic --backend full_node
 ```
 
 ### List Fidelity Bonds
 
 ```bash
-jm-wallet list-bonds --mnemonic-file ~/.jm/wallets/wallet.mnemonic
+jm-wallet list-bonds --mnemonic-file ~/.joinmarket-ng/wallets/wallet.mnemonic
 ```
 
 ### All Commands

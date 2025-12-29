@@ -15,8 +15,8 @@ pip install -e ../jmcore ../jmwallet .
 Generate an encrypted wallet file:
 
 ```bash
-mkdir -p ~/.jm/wallets
-jm-wallet generate --save --prompt-password --output ~/.jm/wallets/taker.mnemonic
+mkdir -p ~/.joinmarket-ng/wallets
+jm-wallet generate --save --prompt-password --output ~/.joinmarket-ng/wallets/taker.mnemonic
 ```
 
 **IMPORTANT**: Write down the displayed mnemonic - it's your only backup!
@@ -27,7 +27,7 @@ See [jmwallet README](../jmwallet/README.md) for wallet management details.
 
 ```bash
 # View balance and addresses
-jm-wallet info --mnemonic-file ~/.jm/wallets/taker.mnemonic --backend neutrino
+jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic --backend neutrino
 ```
 
 ### 3. Fund Your Wallet
@@ -56,7 +56,7 @@ Mix to next mixdepth (recommended for privacy):
 
 ```bash
 jm-taker coinjoin \
-  --mnemonic-file ~/.jm/wallets/taker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
   --amount 1000000 \
   --backend neutrino
 ```
@@ -66,20 +66,20 @@ jm-taker coinjoin \
 For maximum security. Create an environment file to avoid credentials in shell history:
 
 ```bash
-cat > ~/.jm/bitcoin.env << EOF
+cat > ~/.joinmarket-ng/bitcoin.env << EOF
 export BITCOIN_RPC_URL=http://127.0.0.1:8332
 export BITCOIN_RPC_USER=your_rpc_user
 export BITCOIN_RPC_PASSWORD=your_rpc_password
 EOF
-chmod 600 ~/.jm/bitcoin.env
+chmod 600 ~/.joinmarket-ng/bitcoin.env
 ```
 
 Execute CoinJoin:
 
 ```bash
-source ~/.jm/bitcoin.env
+source ~/.joinmarket-ng/bitcoin.env
 jm-taker coinjoin \
-  --mnemonic-file ~/.jm/wallets/taker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
   --amount 1000000 \
   --backend full_node
 ```
@@ -93,7 +93,7 @@ This mixes 1,000,000 sats (0.01 BTC) to the next mixdepth in your wallet.
 Default behavior - sends to next mixdepth (INTERNAL):
 
 ```bash
-jm-taker coinjoin --mnemonic-file ~/.jm/wallets/taker.mnemonic --amount 500000
+jm-taker coinjoin --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic --amount 500000
 ```
 
 ### Send to External Address
@@ -102,7 +102,7 @@ Mix and send to a specific address:
 
 ```bash
 jm-taker coinjoin \
-  --mnemonic-file ~/.jm/wallets/taker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
   --amount 500000 \
   --destination bc1qexampleaddress...
 ```
@@ -113,7 +113,7 @@ Use `--amount 0` to sweep all funds from a mixdepth:
 
 ```bash
 jm-taker coinjoin \
-  --mnemonic-file ~/.jm/wallets/taker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
   --amount 0 \
   --mixdepth 2
 ```
@@ -124,7 +124,7 @@ More counterparties = better privacy:
 
 ```bash
 jm-taker coinjoin \
-  --mnemonic-file ~/.jm/wallets/taker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
   --amount 1000000 \
   --counterparties 6
 ```
@@ -166,7 +166,7 @@ Save as `schedule.json`:
 ### Run Tumbler
 
 ```bash
-jm-taker tumble schedule.json --mnemonic-file ~/.jm/wallets/taker.mnemonic
+jm-taker tumble schedule.json --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic
 ```
 
 ## Configuration
@@ -185,7 +185,7 @@ Lower fees (may find fewer makers):
 
 ```bash
 jm-taker coinjoin \
-  --mnemonic-file ~/.jm/wallets/taker.mnemonic \
+  --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic \
   --amount 1000000 \
   --max-abs-fee 200 \
   --max-rel-fee 0.0005
@@ -229,13 +229,13 @@ services:
       context: ..
       dockerfile: taker/Dockerfile
     environment:
-      MNEMONIC_FILE: /wallets/taker.mnemonic
+      MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/taker.mnemonic
       BACKEND_TYPE: neutrino
       NEUTRINO_URL: http://neutrino:8334
       TOR_SOCKS_HOST: tor
       TOR_SOCKS_PORT: 9050
     volumes:
-      - ~/.jm/wallets:/wallets:ro
+      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
     command: >
       jm-taker coinjoin
         --amount 1000000
@@ -267,11 +267,11 @@ services:
       context: ..
       dockerfile: taker/Dockerfile
     environment:
-      MNEMONIC_FILE: /wallets/taker.mnemonic
+      MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/taker.mnemonic
       BACKEND_TYPE: neutrino
       NEUTRINO_URL: http://neutrino:8334
     volumes:
-      - ~/.jm/wallets:/wallets:ro
+      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
     command: >
       jm-taker coinjoin
         --amount 1000000
@@ -326,7 +326,7 @@ services:
       context: ..
       dockerfile: taker/Dockerfile
     environment:
-      MNEMONIC_FILE: /wallets/taker.mnemonic
+      MNEMONIC_FILE: /home/jm/.joinmarket-ng/wallets/taker.mnemonic
       BACKEND_TYPE: full_node
       BITCOIN_RPC_URL: http://bitcoind:8332
       BITCOIN_RPC_USER: rpcuser
@@ -334,7 +334,7 @@ services:
       TOR_SOCKS_HOST: tor
       TOR_SOCKS_PORT: 9050
     volumes:
-      - ~/.jm/wallets:/wallets:ro
+      - ~/.joinmarket-ng:/home/jm/.joinmarket-ng
     command: >
       jm-taker coinjoin
         --amount 1000000
@@ -432,7 +432,7 @@ Use env vars for RPC credentials (see jmwallet README).
 - UTXO must be ≥20% of CoinJoin amount
 
 **"Insufficient balance"**
-- Check: `jm-wallet info --mnemonic-file ~/.jm/wallets/taker.mnemonic`
+- Check: `jm-wallet info --mnemonic-file ~/.joinmarket-ng/wallets/taker.mnemonic`
 - Reserve some balance for fees
 
 **"CoinJoin timeout"**
