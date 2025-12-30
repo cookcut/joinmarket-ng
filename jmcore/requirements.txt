@@ -8,6 +8,10 @@ annotated-types==0.7.0
     # via pydantic
 anyio==4.12.0
     # via httpx
+base58==2.1.1
+    # via jmcore (pyproject.toml)
+bech32==1.2.0
+    # via jmcore (pyproject.toml)
 certifi==2025.11.12
     # via
     #   httpcore

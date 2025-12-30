@@ -29,6 +29,7 @@ dependencies = [
     # Bitcoin utilities (consolidated from multiple modules)
     "bech32>=1.2.0",
     "base58>=2.1.0",
+    "python-bitcointx>=1.1.5",
 ]
 
 [project.optional-dependencies]
