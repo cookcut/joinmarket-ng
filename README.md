@@ -34,6 +34,34 @@ Unlike other CoinJoin implementations (Wasabi, Whirlpool), JoinMarket has **no c
 
 This project is an alternative implementation of the reference JoinMarket protocol from [joinmarket-clientserver](https://github.com/JoinMarket-Org/joinmarket-clientserver/). The goal is to provide a clean, maintainable, and auditable codebase while maintaining full wire protocol compatibility with the existing JoinMarket network.
 
+#### Why a New Implementation?
+
+The [reference implementation](https://github.com/JoinMarket-Org/joinmarket-clientserver/) has served the community well for years, and we're deeply grateful for all that the contributors have done. However, the project faces some challenges:
+
+- **Limited active development**: Currently only basic maintenance and security updates
+- **181 open issues and 41 open pull requests**: Difficult to get improvements merged
+- **Technical debt**: Contributors have acknowledged that many parts need full rewrites
+- **Architectural limitations**: Tight coupling to Bitcoin Core's BerkeleyDB, difficult to add modern backends like Neutrino
+
+Starting fresh allowed us to:
+- **Modernize the stack**: Python 3.14+, Pydantic v2, AsyncIO, full type hints
+- **Rethink architecture**: Detach wallets from Bitcoin node, support multiple backends
+- **Build comprehensive documentation**: Deep dive into protocol details useful for both implementations
+- **Establish strong testing**: Close to 100% unit test coverage + E2E tests for reference implementation compatibility
+
+#### Code Quality & Testing
+
+This implementation prioritizes auditability and correctness:
+
+- **~100% unit test coverage**: Every component thoroughly tested in isolation
+- **E2E integration tests**: Full CoinJoin flows tested against the reference implementation to ensure wire protocol compatibility
+- **Type safety**: Strict type hints enforced with Mypy
+- **Modern best practices**: Ruff formatting, pre-commit hooks, CI/CD
+
+While this project currently lacks peer review (contributions welcome!), the extensive test suite and clean, well-documented code make auditing straightforward. When additional contributors join, we plan to establish protected branches and require signed commits with multiple approvals.
+
+**We see this as our turn to take JoinMarket to the next level while honoring the foundation built by the original contributors.**
+
 ### Key Features
 
 - **No BerkeleyDB Required**: Works with Bitcoin Core v30+ out of the box

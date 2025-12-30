@@ -42,7 +42,7 @@ class TransactionHistoryEntry:
     cj_amount: int = 0  # satoshis
 
     # Peer information
-    peer_count: int = 0
+    peer_count: int | None = None  # None for makers (unknown), count for takers
     counterparty_nicks: str = ""  # comma-separated
 
     # Fee information (in satoshis)
@@ -282,7 +282,7 @@ def create_maker_history_entry(
         confirmed_at="",
         txid=txid or "",
         cj_amount=cj_amount,
-        peer_count=1,  # Maker only sees the taker
+        peer_count=None,  # Makers don't know total peer count
         counterparty_nicks=taker_nick,
         fee_received=fee_received,
         txfee_contribution=txfee_contribution,
