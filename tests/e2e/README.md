@@ -103,7 +103,10 @@ pip install \
   service-identity==21.1.0 \
   twisted==24.7.0 \
   txtorcon==23.11.0 \
-  python-bitcointx==1.1.5
+  python-bitcointx==1.1.5 \
+  argon2_cffi==21.3.0 \
+  autobahn==20.12.3 \
+  fastbencode==0.3.6
 
 # Note: Full installation with pip install -e may fail on Python 3.14 due to version constraints,
 # but the minimal deps above are sufficient for bond validation tests
