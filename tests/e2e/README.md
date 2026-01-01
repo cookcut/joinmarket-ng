@@ -97,7 +97,7 @@ git clone --depth 1 https://github.com/JoinMarket-Org/joinmarket-clientserver.gi
 # Install system dependencies (Ubuntu/Debian)
 sudo apt-get install -y libsecp256k1-dev
 
-# Install Python dependencies
+# Install Python dependencies (base + jmbitcoin + jmclient from reference implementation)
 pip install \
   chromalog==1.0.5 \
   service-identity==21.1.0 \
@@ -106,10 +106,14 @@ pip install \
   python-bitcointx==1.1.5 \
   argon2_cffi==21.3.0 \
   autobahn==20.12.3 \
-  fastbencode==0.3.6
+  fastbencode==0.3.6 \
+  klein==20.6.0 \
+  mnemonic==0.20 \
+  pyjwt==2.4.0 \
+  werkzeug==2.2.3
 
 # Note: Full installation with pip install -e may fail on Python 3.14 due to version constraints,
-# but the minimal deps above are sufficient for bond validation tests
+# but the deps above are sufficient for bond validation tests
 ```
 
 To run the tests:
