@@ -289,6 +289,49 @@ class TestOrderbookRateLimiter:
         assert limiter.check("J5peer2") is True
         assert not limiter.is_banned("J5peer2")
 
+    def test_get_statistics(self):
+        """Test that statistics are correctly gathered."""
+        limiter = OrderbookRateLimiter(rate_limit=1, interval=10.0, violation_ban_threshold=10)
+
+        # Generate some activity
+        limiter.check("J5Alice")
+        limiter.check("J5Alice")  # 1 violation
+
+        limiter.check("J5Bob")
+        for _ in range(20):
+            limiter.check("J5Bob")  # Gets to 19 violations (1st check succeeds), then banned
+
+        limiter.check("J5Charlie")
+        for _ in range(5):
+            limiter.check("J5Charlie")  # 5 violations
+
+        stats = limiter.get_statistics()
+
+        # Check basic stats (1 + 19 + 5 = 25 total)
+        assert stats["total_violations"] == 25
+        assert stats["tracked_peers"] == 3
+
+        # Check banned peers
+        assert "J5Bob" in stats["banned_peers"]
+        assert "J5Alice" not in stats["banned_peers"]
+        assert "J5Charlie" not in stats["banned_peers"]
+
+        # Check top violators are sorted correctly
+        assert len(stats["top_violators"]) == 3
+        assert stats["top_violators"][0] == ("J5Bob", 19)
+        assert stats["top_violators"][1] == ("J5Charlie", 5)
+        assert stats["top_violators"][2] == ("J5Alice", 1)
+
+    def test_get_statistics_empty(self):
+        """Test statistics with no activity."""
+        limiter = OrderbookRateLimiter()
+        stats = limiter.get_statistics()
+
+        assert stats["total_violations"] == 0
+        assert stats["tracked_peers"] == 0
+        assert stats["banned_peers"] == []
+        assert stats["top_violators"] == []
+
 
 class TestMakerBotRateLimiting:
     """Tests for rate limiting integration in MakerBot."""

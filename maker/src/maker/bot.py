@@ -226,6 +226,40 @@ class OrderbookRateLimiter:
             del self._banned_peers[peer]
             self._violation_counts[peer] = 0  # Reset violations after ban expires
 
+    def get_statistics(self) -> dict[str, Any]:
+        """
+        Get rate limiter statistics for monitoring.
+
+        Returns:
+            Dict with keys:
+                - total_violations: Total violation count across all peers
+                - tracked_peers: Number of peers being tracked
+                - banned_peers: List of currently banned peer nicks
+                - top_violators: List of (nick, violations) tuples, top 10
+        """
+        now = time.monotonic()
+
+        # Get currently banned peers (check for expired bans)
+        banned = [
+            nick
+            for nick, ban_time in self._banned_peers.items()
+            if now - ban_time < self.ban_duration
+        ]
+
+        # Get top violators (sorted by violation count)
+        top_violators = sorted(
+            [(nick, count) for nick, count in self._violation_counts.items() if count > 0],
+            key=lambda x: x[1],
+            reverse=True,
+        )[:10]
+
+        return {
+            "total_violations": sum(self._violation_counts.values()),
+            "tracked_peers": len(self._last_response),
+            "banned_peers": banned,
+            "top_violators": top_violators,
+        }
+
 
 class MakerBot:
     """
@@ -575,6 +609,10 @@ class MakerBot:
             rescan_task = asyncio.create_task(self._periodic_rescan())
             self.listen_tasks.append(rescan_task)
 
+            # Start periodic rate limit status logging task
+            status_task = asyncio.create_task(self._periodic_rate_limit_status())
+            self.listen_tasks.append(status_task)
+
             # Wait for all listening tasks to complete
             await asyncio.gather(*self.listen_tasks, return_exceptions=True)
 
@@ -738,6 +776,56 @@ class MakerBot:
                 logger.error(f"Error in periodic rescan: {e}")
 
         logger.info("Periodic rescan task stopped")
+
+    async def _periodic_rate_limit_status(self) -> None:
+        """Background task to periodically log rate limiting statistics.
+
+        This runs every hour to provide visibility into spam/abuse without
+        flooding logs. Shows:
+        - Total violations across all peers
+        - Currently banned peers
+        - Top violators (by violation count)
+        """
+        # First log after 10 minutes (give time for initial activity)
+        await asyncio.sleep(600)
+
+        while self.running:
+            try:
+                stats = self._orderbook_rate_limiter.get_statistics()
+
+                # Only log if there's activity worth reporting
+                if stats["total_violations"] > 0 or stats["banned_peers"]:
+                    banned_count = len(stats["banned_peers"])
+                    banned_list = ", ".join(stats["banned_peers"][:5])
+                    if banned_count > 5:
+                        banned_list += f", ... and {banned_count - 5} more"
+
+                    top_violators_str = ", ".join(
+                        f"{nick}({count})" for nick, count in stats["top_violators"][:5]
+                    )
+
+                    logger.info(
+                        f"Rate limit status: {stats['total_violations']} total violations, "
+                        f"{banned_count} banned peer(s)"
+                        + (f" [{banned_list}]" if banned_count > 0 else "")
+                        + (
+                            f", top violators: {top_violators_str}"
+                            if stats["top_violators"]
+                            else ""
+                        )
+                    )
+
+                # Log again in 1 hour
+                await asyncio.sleep(3600)
+
+            except asyncio.CancelledError:
+                logger.info("Rate limit status task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in rate limit status task: {e}")
+                await asyncio.sleep(3600)
+
+        logger.info("Rate limit status task stopped")
 
     async def _deferred_wallet_resync(self) -> None:
         """Re-sync wallet after CoinJoin completion in background.
@@ -1006,13 +1094,23 @@ class MakerBot:
                     violations = self._orderbook_rate_limiter.get_violation_count(from_nick)
                     is_banned = self._orderbook_rate_limiter.is_banned(from_nick)
 
-                    # Only log every 10 violations to prevent log flooding
-                    # Or always log ban status changes
-                    if violations <= 1 or violations % 10 == 0 or is_banned:
+                    # Only log at specific violation milestones to prevent log flooding:
+                    # - First violation (violations == 1)
+                    # - Every 10th violation when not banned (10, 20, 30, etc.)
+                    # - ONLY when ban first triggers (violations == threshold AND is_banned)
+                    # Do NOT log every subsequent banned request - that would flood logs
+                    should_log = violations <= 1 or (not is_banned and violations % 10 == 0)
+
+                    # Special case: log exactly once when ban is triggered
+                    if is_banned and violations == self.config.orderbook_violation_ban_threshold:
+                        should_log = True
+
+                    if should_log:
                         if is_banned:
                             logger.warning(
-                                f"BANNED peer {from_nick} attempted orderbook request "
-                                f"(violations: {violations})"
+                                f"BANNED peer {from_nick} for "
+                                f"{self.config.orderbook_ban_duration}s "
+                                f"after {violations} violations"
                             )
                         else:
                             # Show backoff level for context
