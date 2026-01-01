@@ -371,9 +371,16 @@ jobs:
       - name: Clone and install reference implementation
         run: |
           git clone --depth 1 https://github.com/JoinMarket-Org/joinmarket-clientserver.git
-          # Install only the minimal dependencies needed for FidelityBondProof validation
-          # We can't use pip install -e due to Python 3.14 version constraint, so install deps manually
-          pip install python-bitcointx==1.1.5 chromalog==1.0.5
+          # Install base dependencies needed for FidelityBondProof validation
+          # Note: We install deps manually to avoid the Python <3.14 constraint in pyproject.toml
+          # Using newer cryptography version for compatibility with our codebase
+          sudo apt-get update && sudo apt-get install -y libsecp256k1-dev
+          pip install \
+            chromalog==1.0.5 \
+            service-identity==21.1.0 \
+            twisted==24.7.0 \
+            txtorcon==23.11.0 \
+            python-bitcointx==1.1.5
           # The test will add joinmarket-clientserver/src to sys.path
 
       - name: "Start reference services"

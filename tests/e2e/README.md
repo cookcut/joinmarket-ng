@@ -91,10 +91,20 @@ Tests our makers with the reference JoinMarket taker (JAM).
 implementation to be installed for validation purposes:
 
 ```bash
-# Clone and install reference implementation (one-time setup)
+# Clone reference implementation (one-time setup)
 git clone --depth 1 https://github.com/JoinMarket-Org/joinmarket-clientserver.git
-# Install minimal dependencies (python-bitcointx for signing, chromalog for logging)
-pip install python-bitcointx==1.1.5 chromalog==1.0.5
+
+# Install system dependencies (Ubuntu/Debian)
+sudo apt-get install -y libsecp256k1-dev
+
+# Install Python dependencies
+pip install \
+  chromalog==1.0.5 \
+  service-identity==21.1.0 \
+  twisted==24.7.0 \
+  txtorcon==23.11.0 \
+  python-bitcointx==1.1.5
+
 # Note: Full installation with pip install -e may fail on Python 3.14 due to version constraints,
 # but the minimal deps above are sufficient for bond validation tests
 ```
