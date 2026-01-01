@@ -239,7 +239,10 @@ def create_fidelity_bond_proof(
         cert_sig_padded = _pad_signature(cert_sig, 72)
 
         # 3. Pack the proof
-        # TXID needs to be in little-endian (as stored in transactions)
+        # TXID in display format (big-endian, human-readable) - same as how Bitcoin Core
+        # returns txids and how the reference implementation stores them.
+        # Reference: wallet.py line 754 uses tx.GetTxid()[::-1] which converts from
+        # internal (little-endian) to display (big-endian) format.
         txid_bytes = bytes.fromhex(bond.txid)
         if len(txid_bytes) != 32:
             raise ValueError(f"Invalid txid length: {len(txid_bytes)}")

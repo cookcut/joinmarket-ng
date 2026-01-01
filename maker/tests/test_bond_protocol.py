@@ -63,8 +63,8 @@ def test_bond_proof_format_matches_reference():
     assert cert_pub == pubkey, "Cert pubkey should match bond pubkey"
     assert utxo_pub == pubkey, "UTXO pubkey should match bond pubkey (self-signed)"
 
-    # Verify UTXO data
-    assert txid_bytes == bytes.fromhex(bond.txid), "TXID should match"
+    # Verify UTXO data - TXID in display format (big-endian)
+    assert txid_bytes == bytes.fromhex(bond.txid), "TXID should match (display format)"
     assert vout == bond.vout, "Vout should match"
     assert locktime == bond.locktime, "Locktime should match"
 
