@@ -354,6 +354,7 @@ jobs:
           git clone --depth 1 https://github.com/JoinMarket-Org/joinmarket-clientserver.git
           # Install all dependencies from reference implementation (base + jmbitcoin + jmclient)
           # Note: We install deps manually to avoid the Python <3.14 constraint in pyproject.toml
+          # Using latest klein/werkzeug for Python 3.14 compatibility (ast.Str removed)
           sudo apt-get update && sudo apt-get install -y libsecp256k1-dev
           pip install \
             chromalog==1.0.5 \
@@ -364,10 +365,10 @@ jobs:
             argon2_cffi==21.3.0 \
             autobahn==20.12.3 \
             fastbencode==0.3.6 \
-            klein==20.6.0 \
             mnemonic==0.20 \
             pyjwt==2.4.0 \
-            werkzeug==2.2.3
+            klein \
+            werkzeug
           # The test will add joinmarket-clientserver/src to sys.path
 
       - name: "Start reference services"
