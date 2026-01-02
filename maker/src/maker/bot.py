@@ -434,11 +434,11 @@ class MakerBot:
                 self.config.data_dir if self.config.data_dir else get_default_data_dir()
             )
             bond_registry = load_registry(resolved_data_dir)
-            fidelity_bond_addresses: list[tuple[str, int]] = []
+            fidelity_bond_addresses: list[tuple[str, int, int]] = []
             if bond_registry.bonds:
-                # Extract (address, locktime) tuples from registry
+                # Extract (address, locktime, index) tuples from registry
                 fidelity_bond_addresses = [
-                    (bond.address, bond.locktime) for bond in bond_registry.bonds
+                    (bond.address, bond.locktime, bond.index) for bond in bond_registry.bonds
                 ]
                 logger.info(
                     f"Loaded {len(fidelity_bond_addresses)} fidelity bond address(es) from registry"

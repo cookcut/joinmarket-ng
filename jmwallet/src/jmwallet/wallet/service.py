@@ -381,14 +381,14 @@ class WalletService:
         return utxos
 
     async def sync_all(
-        self, fidelity_bond_addresses: list[tuple[str, int]] | None = None
+        self, fidelity_bond_addresses: list[tuple[str, int, int]] | None = None
     ) -> dict[int, list[UTXOInfo]]:
         """
         Sync all mixdepths, optionally including fidelity bond addresses.
 
         Args:
-            fidelity_bond_addresses: Optional list of (address, locktime) tuples for fidelity bonds
-                                    to scan in the same pass as wallet descriptors
+            fidelity_bond_addresses: Optional list of (address, locktime, index) tuples
+                                    for fidelity bonds to scan with wallet descriptors
 
         Returns:
             Dictionary mapping mixdepth to list of UTXOs
@@ -412,7 +412,7 @@ class WalletService:
         return result
 
     async def _sync_all_with_descriptors(
-        self, fidelity_bond_addresses: list[tuple[str, int]] | None = None
+        self, fidelity_bond_addresses: list[tuple[str, int, int]] | None = None
     ) -> dict[int, list[UTXOInfo]] | None:
         """
         Sync all mixdepths using efficient descriptor scanning.
@@ -422,7 +422,7 @@ class WalletService:
         where a full UTXO set scan takes ~90 seconds).
 
         Args:
-            fidelity_bond_addresses: Optional list of (address, locktime) tuples to scan
+            fidelity_bond_addresses: Optional list of (address, locktime, index) tuples to scan
                                     in the same pass as wallet descriptors
 
         Returns:
@@ -433,8 +433,8 @@ class WalletService:
         descriptors: list[str | dict[str, Any]] = []
         # Map descriptor string (without checksum) -> (mixdepth, change)
         desc_to_path: dict[str, tuple[int, int]] = {}
-        # Map fidelity bond address -> locktime
-        bond_address_to_locktime: dict[str, int] = {}
+        # Map fidelity bond address -> (locktime, index)
+        bond_address_to_info: dict[str, tuple[int, int]] = {}
 
         for mixdepth in range(self.mixdepth_count):
             xpub = self.get_account_xpub(mixdepth)
@@ -458,11 +458,11 @@ class WalletService:
             if not hasattr(self, "fidelity_bond_locktime_cache"):
                 self.fidelity_bond_locktime_cache = {}
 
-            for address, locktime in fidelity_bond_addresses:
+            for address, locktime, index in fidelity_bond_addresses:
                 descriptors.append(f"addr({address})")
-                bond_address_to_locktime[address] = locktime
-                # Cache the address with locktime
-                self.address_cache[address] = (0, FIDELITY_BOND_BRANCH, -1)  # Index unknown
+                bond_address_to_info[address] = (locktime, index)
+                # Cache the address with the correct index from registry
+                self.address_cache[address] = (0, FIDELITY_BOND_BRANCH, index)
                 self.fidelity_bond_locktime_cache[address] = locktime
 
         # Get current block height for confirmation calculation
@@ -493,17 +493,16 @@ class WalletService:
 
             if desc_base.startswith("addr(") and desc_base.endswith(")"):
                 bond_address = desc_base[5:-1]
-                if bond_address in bond_address_to_locktime:
+                if bond_address in bond_address_to_info:
                     # This is a fidelity bond UTXO
-                    locktime = bond_address_to_locktime[bond_address]
+                    locktime, index = bond_address_to_info[bond_address]
                     confirmations = 0
                     utxo_height = utxo_data.get("height", 0)
                     if utxo_height > 0:
                         confirmations = tip_height - utxo_height + 1
 
                     # Path format for fidelity bonds: m/84'/0'/0'/2/index:locktime
-                    # Index is unknown from registry, so we use placeholder
-                    path = f"{self.root_path}/0'/{FIDELITY_BOND_BRANCH}/?:{locktime}"
+                    path = f"{self.root_path}/0'/{FIDELITY_BOND_BRANCH}/{index}:{locktime}"
 
                     utxo_info = UTXOInfo(
                         txid=utxo_data["txid"],
@@ -520,7 +519,7 @@ class WalletService:
                     fidelity_bond_utxos.append(utxo_info)
                     logger.info(
                         f"Found fidelity bond UTXO: {utxo_info.txid}:{utxo_info.vout} "
-                        f"value={utxo_info.value} locktime={locktime}"
+                        f"value={utxo_info.value} locktime={locktime} index={index}"
                     )
                     continue
 
