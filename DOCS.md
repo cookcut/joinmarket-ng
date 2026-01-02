@@ -260,25 +260,7 @@ JoinMarket NG supports two blockchain backends with different tradeoffs:
 - Use Core if: You run a full node, need full validation
 - Use Neutrino if: Limited storage, fast setup, light client needed
 
-### Neutrino Compatibility Feature
 
-The `neutrino_compat` feature flag enables Neutrino backends by extending UTXO metadata.
-
-**Problem**: Neutrino can't verify arbitrary UTXOs (only addresses it watches). CoinJoin needs to verify peer UTXOs.
-
-**Solution**: Extended UTXO format includes scriptPubKey + block height:
-
-| Format | Example |
-|--------|---------|
-| Legacy | `txid:vout` |
-| Extended | `txid:vout:scriptpubkey:height` |
-
-When both peers support `neutrino_compat`:
-1. UTXO metadata included in `!auth` and `!ioauth` messages
-2. Neutrino backend adds scriptPubKey to watch list
-3. Rescans from block height to verify UTXO exists
-
-**Compatibility**: Neutrino takers filter out makers without `neutrino_compat` flag.
 
 ### Transaction Verification
 
@@ -428,28 +410,6 @@ The reference implementation directory server may not respond to `GETPEERLIST` r
 2. Fall back to receiving peerlist updates via the initial handshake response
 3. Listen for peerlist updates broadcast during normal operation
 
-### Peerlist Feature Extension Format
-
-Our implementation extends the peerlist format to include feature flags:
-
-```
-nick;location;F:feature1+feature2
-```
-
-**Important**: The feature separator is `+` (plus), not `,` (comma), because the peerlist itself uses commas to separate entries. Using commas for features would cause parsing ambiguity:
-
-```
-# WRONG: Commas cause ambiguity
-nick1;host.onion:5222;F:feat1,feat2,nick2;host2.onion:5222
-# Parser cannot distinguish feature "feat2" from entry "nick2;host2.onion:5222"
-
-# CORRECT: Plus separator avoids ambiguity
-nick1;host.onion:5222;F:feat1+feat2,nick2;host2.onion:5222
-# Clear separation: entry 1 has features "feat1" and "feat2", entry 2 starts at "nick2"
-```
-
-The `F:` prefix identifies the features field and maintains backward compatibility with legacy clients that don't understand the extension.
-
 ### Known Directory Servers
 
 | Network | Type | Address |
@@ -494,23 +454,61 @@ This approach ensures:
 
 | Feature | Description |
 |---------|-------------|
+| `extended_peerlist` | Supports extended peerlist format with feature flags in `F:` field |
 | `neutrino_compat` | Supports extended UTXO format with scriptPubKey and blockheight |
+
+#### Extended Peerlist
+
+The `extended_peerlist` feature flag enables peers to advertise their capabilities through the peerlist format.
+
+**Format**: `nick;location;F:feature1+feature2`
+
+When both directory server and peer support `extended_peerlist`:
+1. Peer advertises features in handshake
+2. Directory server includes features in peerlist responses
+3. Peers can filter orderbook by required features before initiating CoinJoin
+
+**Compatibility**: Peers without `extended_peerlist` receive standard `nick;location` format.
+
+#### Neutrino Compatibility
+
+The `neutrino_compat` feature flag enables Neutrino backends by extending UTXO metadata.
+
+**Problem**: Neutrino can't verify arbitrary UTXOs (only addresses it watches). CoinJoin needs to verify peer UTXOs.
+
+**Solution**: Extended UTXO format includes scriptPubKey + block height:
+
+| Format | Example |
+|--------|---------|
+| Legacy | `txid:vout` |
+| Extended | `txid:vout:scriptpubkey:height` |
+
+When both peers support `neutrino_compat`:
+1. UTXO metadata included in `!auth` and `!ioauth` messages
+2. Neutrino backend adds scriptPubKey to watch list
+3. Rescans from block height to verify UTXO exists
+
+**Compatibility**: Neutrino takers filter out makers without `neutrino_compat` flag.
 
 ### FeatureSet Implementation
 
 ```python
-from jmcore.protocol import FeatureSet, FEATURE_NEUTRINO_COMPAT
+from jmcore.protocol import FeatureSet, FEATURE_NEUTRINO_COMPAT, FEATURE_EXTENDED_PEERLIST
 
 # Create feature set
-features = FeatureSet(features={FEATURE_NEUTRINO_COMPAT})
+features = FeatureSet(features={FEATURE_EXTENDED_PEERLIST, FEATURE_NEUTRINO_COMPAT})
 
 # Check support
+if features.supports_extended_peerlist():
+    # Use extended peerlist format with F: field
+    pass
+
 if features.supports_neutrino_compat():
     # Use extended UTXO format
     pass
 
 # Serialize for handshake
-features_dict = features.to_dict()  # {"neutrino_compat": True}
+features_dict = features.to_dict()  # {"extended_peerlist": True, "neutrino_compat": True}
 ```
 
 ### Handshake Integration
@@ -519,7 +517,7 @@ features_dict = features.to_dict()  # {"neutrino_compat": True}
 ```json
 {
   "proto-ver": 5,
-  "features": {"neutrino_compat": true},
+  "features": {"extended_peerlist": true, "neutrino_compat": true},
   ...
 }
 ```
@@ -529,12 +527,34 @@ features_dict = features.to_dict()  # {"neutrino_compat": True}
 {
   "proto-ver-min": 5,
   "proto-ver-max": 5,
-  "features": {"neutrino_compat": true},
+  "features": {"extended_peerlist": true, "neutrino_compat": true},
   ...
 }
 ```
 
 **Note**: The `features` dict is ignored by the reference implementation but preserved for our peers.
+
+### Extended Peerlist Format
+
+Our implementation extends the peerlist format to include feature flags:
+
+```
+nick;location;F:feature1+feature2
+```
+
+**Important**: The feature separator is `+` (plus), not `,` (comma), because the peerlist itself uses commas to separate entries. Using commas for features would cause parsing ambiguity:
+
+```
+# WRONG: Commas cause ambiguity
+nick1;host.onion:5222;F:feat1,feat2,nick2;host2.onion:5222
+# Parser cannot distinguish feature "feat2" from entry "nick2;host2.onion:5222"
+
+# CORRECT: Plus separator avoids ambiguity
+nick1;host.onion:5222;F:feat1+feat2,nick2;host2.onion:5222
+# Clear separation: entry 1 has features "feat1" and "feat2", entry 2 starts at "nick2"
+```
+
+The `F:` prefix identifies the features field and maintains backward compatibility with legacy clients that don't understand the extension.
 
 ---
 
