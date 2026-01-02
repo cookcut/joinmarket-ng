@@ -388,10 +388,16 @@ class CoinJoinSession:
             if not signatures:
                 return False, {"error": "Failed to sign transaction"}
 
-            response = {"signatures": signatures}
+            # Compute txid from the unsigned transaction for history tracking
+            # The txid is computed from the non-witness data so we can calculate it now
+            from jmcore.bitcoin import get_txid
+
+            txid = get_txid(tx_hex)
+
+            response = {"signatures": signatures, "txid": txid}
 
             self.state = CoinJoinState.SIG_SENT
-            logger.info(f"Sent !sig with {len(signatures)} signatures")
+            logger.info(f"Sent !sig with {len(signatures)} signatures (txid: {txid[:16]}...)")
 
             return True, response
 

@@ -960,8 +960,16 @@ class MakerBot:
         logger.info("Pending transaction monitor stopped")
 
     async def _update_pending_history(self) -> None:
-        """Check and update pending transaction confirmations in history."""
-        from jmwallet.history import get_pending_transactions, update_transaction_confirmation
+        """Check and update pending transaction confirmations in history.
+
+        For entries without txid, attempts to discover the txid by checking
+        if the destination address has received funds.
+        """
+        from jmwallet.history import (
+            get_pending_transactions,
+            update_pending_transaction_txid,
+            update_transaction_confirmation,
+        )
 
         pending = get_pending_transactions(data_dir=self.config.data_dir)
         if not pending:
@@ -970,10 +978,38 @@ class MakerBot:
         logger.debug(f"Checking {len(pending)} pending transaction(s)...")
 
         for entry in pending:
-            if not entry.txid:
-                continue
-
             try:
+                # If entry has no txid, try to discover it from the blockchain
+                if not entry.txid:
+                    if entry.destination_address:
+                        logger.debug(
+                            f"Attempting to discover txid for pending entry "
+                            f"(dest: {entry.destination_address[:20]}...)"
+                        )
+                        # Look for the txid that paid to our CoinJoin address
+                        txid = await self._discover_txid_for_address(entry.destination_address)
+                        if txid:
+                            update_pending_transaction_txid(
+                                destination_address=entry.destination_address,
+                                txid=txid,
+                                data_dir=self.config.data_dir,
+                            )
+                            logger.info(
+                                f"Discovered txid {txid[:16]}... for address "
+                                f"{entry.destination_address[:20]}..."
+                            )
+                            # Update entry for confirmation check below
+                            entry.txid = txid
+                        else:
+                            logger.debug(
+                                f"No UTXO found for {entry.destination_address[:20]}... "
+                                f"(tx may not be confirmed yet)"
+                            )
+                            continue
+                    else:
+                        logger.debug("Pending entry has no txid and no destination address")
+                        continue
+
                 # Check if transaction exists and get confirmations
                 tx_info = await self.backend.get_transaction(entry.txid)
 
@@ -1006,7 +1042,32 @@ class MakerBot:
                     )
 
             except Exception as e:
-                logger.debug(f"Error checking transaction {entry.txid[:16]}...: {e}")
+                txid_str = entry.txid[:16] if entry.txid else "unknown"
+                logger.debug(f"Error checking transaction {txid_str}...: {e}")
+
+    async def _discover_txid_for_address(self, address: str) -> str | None:
+        """Try to discover the txid for a transaction that paid to an address.
+
+        This is used when a maker history entry doesn't have a txid recorded
+        (e.g., from older versions or if the txid wasn't captured).
+
+        Args:
+            address: The destination address to check
+
+        Returns:
+            Transaction ID if found, None otherwise
+        """
+        try:
+            # Get UTXOs for this address - if there are any, the first one's txid
+            # is likely our CoinJoin (assuming fresh addresses are used)
+            utxos = await self.backend.get_utxos([address])
+            if utxos:
+                # Return the txid of the first (and likely only) UTXO
+                return utxos[0].txid
+            return None
+        except Exception as e:
+            logger.debug(f"Error discovering txid for {address[:20]}...: {e}")
+            return None
 
     async def _deferred_wallet_resync(self) -> None:
         """Resync wallet in background after a CoinJoin completes."""
