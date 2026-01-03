@@ -90,99 +90,38 @@ jobs:
             BUILDKIT_INLINE_CACHE=1
 
   # ==========================================================================
-  # Stage 2a: Unit tests (parallel, no Docker needed)
+  # Stage 2a: Unit tests (combined in single job for efficiency)
   # Runs in parallel with image builds for faster feedback
+  # Single job frees up runner slots faster for integration tests
   # ==========================================================================
-  test-jmcore:
+  test-unit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-python-deps
         with:
-          components: jmcore
+          components: jmcore,jmwallet,directory_server,orderbook_watcher,taker
           install-dev: 'true'
 
-      - name: Test jmcore
+      - name: Run unit tests
         run: |
-          pytest -c pytest.ini jmcore --junitxml=junit/test-results.xml \
-            --cov=jmcore --cov-report=term-missing --cov-report=xml -v \
-            --fail-on-skip
+          pytest -c pytest.ini jmcore directory_server orderbook_watcher taker \
+            --junitxml=junit/unit-tests.xml \
+            --cov=jmcore --cov=directory_server --cov=orderbook_watcher --cov=taker \
+            --cov-report=term-missing --cov-report=xml --cov-report=html \
+            -v --fail-on-skip
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: jmcore-results
-          path: |
-            junit/test-results.xml
-            coverage.xml
+      - name: Rename coverage file
         if: always()
-
-  test-directory-server:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-python-deps
-        with:
-          components: jmcore,directory_server
-          install-dev: 'true'
-
-      - name: Test directory_server
-        run: |
-          pytest -c pytest.ini directory_server --junitxml=junit/test-results.xml \
-            --cov=directory_server --cov-report=term-missing --cov-report=xml -v \
-            --fail-on-skip
+        run: mv coverage.xml coverage-unit.xml
 
       - uses: actions/upload-artifact@v4
         with:
-          name: directory-server-results
+          name: unit-test-results
           path: |
-            junit/test-results.xml
-            coverage.xml
-        if: always()
-
-  test-orderbook-watcher:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-python-deps
-        with:
-          components: jmcore,orderbook_watcher
-          install-dev: 'true'
-
-      - name: Test orderbook_watcher
-        run: |
-          pytest -c pytest.ini orderbook_watcher --junitxml=junit/test-results.xml \
-            --cov=orderbook_watcher --cov-report=term-missing --cov-report=xml -v \
-            --fail-on-skip
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: orderbook-watcher-results
-          path: |
-            junit/test-results.xml
-            coverage.xml
-        if: always()
-
-  test-taker:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-python-deps
-        with:
-          components: jmcore,jmwallet,taker
-          install-dev: 'true'
-
-      - name: Test taker
-        run: |
-          pytest -c pytest.ini taker --junitxml=junit/test-results.xml \
-            --cov=taker --cov-report=term-missing --cov-report=xml -v \
-            --fail-on-skip
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: taker-results
-          path: |
-            junit/test-results.xml
-            coverage.xml
+            junit/unit-tests.xml
+            coverage-unit.xml
+            htmlcov/
         if: always()
 
   # ==========================================================================
@@ -931,11 +870,8 @@ jobs:
   # ==========================================================================
   publish-images:
     needs:
-      # Unit tests (run in parallel with build)
-      - test-jmcore
-      - test-directory-server
-      - test-orderbook-watcher
-      - test-taker
+      # Unit tests (combined in single job)
+      - test-unit
       # Tests with external Docker (run in parallel with build)
       - test-jmwallet
       - test-maker
