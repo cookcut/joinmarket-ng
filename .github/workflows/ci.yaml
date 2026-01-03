@@ -775,12 +775,11 @@ jobs:
         if: always()
 
   # ==========================================================================
-  # Stage 4a: Multi-arch builds (run in parallel with ALL other jobs)
+  # Stage 4a: ARM64 builds (parallel with everything else)
   # Only on main/master to save time on PRs
-  # Starts immediately and uses registry layer cache as it becomes available
-  # No dependency on build-images - cache layers stream in real-time!
+  # Builds ARM64 images using QEMU emulation
   # ==========================================================================
-  build-multiarch:
+  build-arm64:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -822,7 +821,7 @@ jobs:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
-          platforms: linux/arm64,linux/arm/v7
+          platforms: linux/arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -834,40 +833,101 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}
-          flavor: |
-            suffix=${{ matrix.tag_suffix }}-multiarch
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix={{branch}}-
-
-      - name: Build and push multi-arch image
+      - name: Build and push ARM64 image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           target: ${{ matrix.target || '' }}
           push: true
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/arm64
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ github.ref_name }}-${{ github.sha }}${{ matrix.tag_suffix }}-arm64
           cache-from: |
             type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache
             type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ env.CI_TAG }}
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache-multiarch,mode=max
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache-arm64,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
 
   # ==========================================================================
-  # Stage 4b: Publish images (promote tested images to production tags)
-  # Much faster than rebuilding - just re-tags existing images
+  # Stage 4b: ARMv7 builds (parallel with everything else)
+  # Only on main/master to save time on PRs
+  # Builds ARMv7 images using QEMU emulation
+  # ==========================================================================
+  build-armv7:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: directory-server
+            dockerfile: ./directory_server/Dockerfile
+            image: directory-server
+            target: production
+            tag_suffix: ""
+          - name: directory-server-debug
+            dockerfile: ./directory_server/Dockerfile
+            image: directory-server
+            target: debug
+            tag_suffix: "-debug"
+          - name: orderbook-watcher
+            dockerfile: ./orderbook_watcher/Dockerfile
+            image: orderbook-watcher
+            target: ""
+            tag_suffix: ""
+          - name: maker
+            dockerfile: ./maker/Dockerfile
+            image: maker
+            target: ""
+            tag_suffix: ""
+          - name: taker
+            dockerfile: ./taker/Dockerfile
+            image: taker
+            target: ""
+            tag_suffix: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/arm/v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ARMv7 image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          target: ${{ matrix.target || '' }}
+          push: true
+          platforms: linux/arm/v7
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ github.ref_name }}-${{ github.sha }}${{ matrix.tag_suffix }}-armv7
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache
+            type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ env.CI_TAG }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache-armv7,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+  # ==========================================================================
+  # Stage 4c: Publish images (combine manifests and promote to production)
+  # Waits for ALL builds to complete, then creates multi-arch manifests
+  # Combines amd64 (from build-images) + arm64 + armv7 into single manifest
   # ==========================================================================
   publish-images:
     needs:
@@ -884,8 +944,9 @@ jobs:
       - test-reference
       - test-neutrino
       - test-reference-maker
-      # Multi-arch builds (run in parallel with integration tests)
-      - build-multiarch
+      # ARM builds (run in parallel with everything)
+      - build-arm64
+      - build-armv7
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -914,6 +975,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -936,15 +1000,28 @@ jobs:
             type=sha,prefix={{branch}}-
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Pull and tag multi-arch image
+      - name: Create and push multi-arch manifest
         run: |
-          # Pull the tested multi-arch image
-          SOURCE_TAG="${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ github.ref_name }}-${{ github.sha }}${{ matrix.tag_suffix }}-multiarch"
-          docker buildx imagetools inspect "$SOURCE_TAG"
+          # Define source images for each architecture
+          AMD64_IMAGE="${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ env.CI_TAG }}${{ matrix.tag_suffix }}"
+          ARM64_IMAGE="${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ github.ref_name }}-${{ github.sha }}${{ matrix.tag_suffix }}-arm64"
+          ARMV7_IMAGE="${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:${{ github.ref_name }}-${{ github.sha }}${{ matrix.tag_suffix }}-armv7"
 
-          # Create tags for all production versions
+          echo "Inspecting source images:"
+          docker buildx imagetools inspect "$AMD64_IMAGE" || echo "AMD64 image not found"
+          docker buildx imagetools inspect "$ARM64_IMAGE" || echo "ARM64 image not found"
+          docker buildx imagetools inspect "$ARMV7_IMAGE" || echo "ARMv7 image not found"
+
+          # Create multi-arch manifest for each production tag
           TAGS="${{ steps.meta.outputs.tags }}"
           for TAG in $TAGS; do
-            echo "Creating tag: $TAG"
-            docker buildx imagetools create --tag "$TAG" "$SOURCE_TAG"
+            echo "Creating multi-arch manifest: $TAG"
+            docker buildx imagetools create \
+              --tag "$TAG" \
+              "$AMD64_IMAGE" \
+              "$ARM64_IMAGE" \
+              "$ARMV7_IMAGE"
+
+            echo "Verifying manifest: $TAG"
+            docker buildx imagetools inspect "$TAG"
           done
