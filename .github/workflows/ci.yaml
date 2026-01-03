@@ -775,12 +775,12 @@ jobs:
         if: always()
 
   # ==========================================================================
-  # Stage 4a: Multi-arch builds (run in parallel with integration tests)
+  # Stage 4a: Multi-arch builds (run in parallel with ALL other jobs)
   # Only on main/master to save time on PRs
-  # These builds leverage the tested amd64 layer cache from build-images
+  # Starts immediately and uses registry layer cache as it becomes available
+  # No dependency on build-images - cache layers stream in real-time!
   # ==========================================================================
   build-multiarch:
-    needs: build-images
     runs-on: ubuntu-latest
     permissions:
       contents: read
