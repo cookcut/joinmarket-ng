@@ -272,3 +272,4 @@ MIT License. See [LICENSE](./LICENSE) for details.
 Join the JoinMarket community to discuss, get help, and stay updated:
 
 - **Telegram**: https://t.me/joinmarketorg
+- **SimpleX**: https://smp12.simplex.im/g#bx_0bFdk7OnttE0jlytSd73jGjCcHy2qCrhmEzgWXTk
